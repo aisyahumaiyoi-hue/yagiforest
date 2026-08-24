@@ -240,6 +240,12 @@ export default function ProductDetail() {
                             {product.unit} · {product.unitPrice}
                         </span>
                     </div>
+                    <button
+                        onClick={() => navigate(`/ask-yagi?product_id=${product.id}&product_name=${encodeURIComponent(product.shortName)}`)}
+                        className="glass-control focus-ring mt-3 inline-flex items-center gap-1.5 rounded-[12px] px-3 py-2 text-[12px] font-semibold text-secondary"
+                    >
+                        <Sparkles className="h-4 w-4" strokeWidth={2} /> Ask YAGI about this
+                    </button>
                 </div>
 
                 {/* Variants */}

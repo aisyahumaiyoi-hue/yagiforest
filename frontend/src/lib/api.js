@@ -61,6 +61,23 @@ export const api = {
     loyalty: () => request("/loyalty"),
     getProfile: () => request("/profile"),
     updateProfile: (body) => request("/profile", { method: "PUT", body }),
+    // ai
+    aiChat: (body) => request("/ai/chat", { method: "POST", body }),
+    aiConversations: () => request("/ai/conversations"),
+    // ops
+    submitProof: (orderNumber, image_data) => request(`/orders/${orderNumber}/proof`, { method: "POST", body: { image_data } }),
+    listAddresses: () => request("/addresses"),
+    addAddress: (body) => request("/addresses", { method: "POST", body }),
+    rewards: () => request("/rewards"),
+    redeem: (reward_id) => request("/rewards/redeem", { method: "POST", body: { reward_id } }),
+    // superadmin
+    saKnowledge: () => request("/superadmin/knowledge"),
+    saAddKnowledge: (body) => request("/superadmin/knowledge", { method: "POST", body }),
+    saToggleKnowledge: (source_id, status) => request("/superadmin/knowledge", { method: "PATCH", body: { source_id, status } }),
+    saOrders: () => request("/superadmin/orders"),
+    saApprove: (order_number) => request("/superadmin/orders/approve", { method: "POST", body: { order_number } }),
+    saReject: (order_number, reason) => request("/superadmin/orders/reject", { method: "POST", body: { order_number, reason } }),
+    saAiTest: (message) => request("/superadmin/ai-test", { method: "POST", body: { message } }),
 };
 
 // Normalize backend cart -> shape the UI already expects

@@ -265,9 +265,9 @@ export default function Routine() {
                 {/* Premium feature cards */}
                 <div className="grid grid-cols-2 gap-2.5">
                     {[
-                        { key: "analyzer", Icon: ScanFace, title: "Skin analyzer", desc: "Understand visible changes and update your routine.", cta: "Open" },
-                        { key: "agent", Icon: MessageCircle, title: "Skin agent", desc: "Ask about your routine, products and progress.", cta: "Ask YAGI" },
-                    ].map(({ key, Icon, title, desc, cta }) => (
+                        { key: "analyzer", Icon: ScanFace, title: "Skin analyzer", desc: "Understand visible changes and update your routine.", cta: "Open", live: false },
+                        { key: "agent", Icon: MessageCircle, title: "Ask YAGI", desc: "Ask about your routine, products and general eczema care.", cta: "Ask YAGI", live: true },
+                    ].map(({ key, Icon, title, desc, cta, live }) => (
                         <div key={key} className="glass-shell rounded-[22px]">
                             <div className="impact-glass relative flex h-full flex-col rounded-[18px] p-3.5">
                                 <Sparkles className="absolute right-2 top-2 h-8 w-8 text-[hsl(120_40%_80%)]" strokeWidth={1.2} />
@@ -276,11 +276,13 @@ export default function Routine() {
                                 </span>
                                 <p className="mt-2 text-[13px] font-semibold text-foreground">{title}</p>
                                 <p className="mt-0.5 text-[10.5px] leading-tight text-muted-foreground">{desc}</p>
-                                <span className="mt-1.5 w-fit rounded-full bg-pale px-2 py-[2px] text-[9.5px] font-medium text-secondary">
-                                    Coming soon
-                                </span>
+                                {!live && (
+                                    <span className="mt-1.5 w-fit rounded-full bg-pale px-2 py-[2px] text-[9.5px] font-medium text-secondary">
+                                        Coming soon
+                                    </span>
+                                )}
                                 <button
-                                    onClick={() => setDevTool(title)}
+                                    onClick={() => (live ? navigate("/ask-yagi") : setDevTool(title))}
                                     className="btn-green focus-ring mt-auto rounded-[12px] py-2 text-[12px] font-semibold"
                                 >
                                     {cta}

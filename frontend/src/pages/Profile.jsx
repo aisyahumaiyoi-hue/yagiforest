@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { User, Package, Gift, Heart, MapPin, Leaf, HelpCircle, Settings, ChevronRight, LogOut, Sparkles } from "lucide-react";
 import { MobileShell } from "@/components/yagi/MobileShell";
 import { Wordmark } from "@/components/yagi/Wordmark";
@@ -88,7 +89,7 @@ export default function Profile() {
                         <div className="glass-shell rounded-[20px]">
                             <div className="inner-card divide-y divide-border/60 rounded-[16px] px-4">
                                 {SECTIONS.map(([label, Icon, path]) => (
-                                    <button key={label} onClick={() => path && navigate(path)} className="flex w-full items-center gap-3 py-3 text-left">
+                                    <button key={label} onClick={() => (path ? navigate(path) : toast("Coming soon"))} className="flex w-full items-center gap-3 py-3 text-left">
                                         <Icon className="h-[18px] w-[18px] text-secondary" strokeWidth={1.9} />
                                         <span className="flex-1 text-[13px] text-foreground">{label}</span>
                                         <ChevronRight className="h-4 w-4 text-muted-foreground" strokeWidth={2} />

@@ -13,6 +13,8 @@ import Auth from "@/pages/Auth";
 import Profile from "@/pages/Profile";
 import Rewards from "@/pages/Rewards";
 import Orders from "@/pages/Orders";
+import AskYagi from "@/pages/AskYagi";
+import Superadmin from "@/pages/Superadmin";
 
 function App() {
     return (
@@ -31,6 +33,8 @@ function App() {
                         <Route path="/profile" element={<Profile />} />
                         <Route path="/profile/orders" element={<Orders />} />
                         <Route path="/rewards" element={<Rewards />} />
+                        <Route path="/ask-yagi" element={<AskYagi />} />
+                        <Route path="/superadmin" element={<Superadmin />} />
                     </Routes>
                 </BrowserRouter>
                 <Toaster position="top-center" />

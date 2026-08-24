@@ -7,17 +7,33 @@ import { useYagi } from "@/store/YagiContext";
 import { api } from "@/lib/api";
 import { formatIDR } from "@/lib/format";
 
-const STATUS_LABEL = { awaiting_transfer: "Awaiting transfer", paid: "Paid", pending: "Pending" };
+const STATUS_LABEL = { awaiting_transfer: "Awaiting transfer", under_review: "Under review", paid: "Paid", pending: "Pending", rejected: "Proof rejected" };
+const TIMELINE = ["Order placed", "Transfer submitted", "Payment confirmed", "Preparing", "Shipped", "Delivered"];
+const EVENT_MAP = { transfer_submitted: 1, payment_confirmed: 2, transfer_rejected: 0 };
 
 export default function Orders() {
     const navigate = useNavigate();
     const { isCustomer } = useYagi();
     const [orders, setOrders] = useState(null);
 
+    const reload = () => api.getOrders().then((r) => setOrders(r.items)).catch(() => setOrders([]));
     useEffect(() => {
-        if (isCustomer) api.getOrders().then((r) => setOrders(r.items)).catch(() => setOrders([]));
+        if (isCustomer) reload();
         else setOrders([]);
     }, [isCustomer]);
+
+    const uploadProof = (orderNumber) => (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async () => {
+            try {
+                await api.submitProof(orderNumber, reader.result);
+                reload();
+            } catch (err) { /* noop */ }
+        };
+        reader.readAsDataURL(file);
+    };
 
     return (
         <MobileShell nav={false}>
@@ -57,6 +73,32 @@ export default function Orders() {
                                 <span className="text-[11.5px] text-muted-foreground">+{o.points_earned} points · {o.items.length} items</span>
                                 <span className="text-[14px] font-semibold text-primary">{formatIDR(o.grand_total)}</span>
                             </div>
+
+                            {/* Timeline */}
+                            {(() => {
+                                let stage = 0;
+                                (o.events || []).forEach((ev) => { if (EVENT_MAP[ev.type] != null) stage = Math.max(stage, EVENT_MAP[ev.type]); });
+                                if (o.status === "shipped") stage = 4; if (o.status === "delivered") stage = 5;
+                                return (
+                                    <div className="mt-3 flex items-center gap-1">
+                                        {TIMELINE.map((t, i) => (
+                                            <div key={t} className="flex flex-1 flex-col items-center last:flex-none">
+                                                <span className={`h-2 w-2 rounded-full ${i <= stage ? "bg-[hsl(120_48%_46%)]" : "bg-[hsl(140_15%_82%)]"}`} />
+                                            </div>
+                                        ))}
+                                    </div>
+                                );
+                            })()}
+
+                            {(o.payment_status === "awaiting_transfer" || o.payment_status === "rejected") && (
+                                <label className="btn-green focus-ring mt-3 block cursor-pointer rounded-[12px] py-2.5 text-center text-[12.5px] font-semibold">
+                                    Upload transfer proof
+                                    <input type="file" accept="image/*,application/pdf" className="hidden" onChange={uploadProof(o.order_number)} />
+                                </label>
+                            )}
+                            {o.payment_status === "under_review" && (
+                                <p className="mt-3 rounded-[10px] bg-pale/60 py-2 text-center text-[11.5px] font-medium text-secondary">Proof submitted · under review</p>
+                            )}
                         </div>
                     </div>
                 ))}
