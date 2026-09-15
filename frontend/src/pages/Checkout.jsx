@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -9,6 +9,7 @@ import { AuthGate } from "@/components/yagi/AuthGate";
 import { useYagi } from "@/store/YagiContext";
 import { formatIDR } from "@/lib/format";
 import { toast } from "sonner";
+import { api } from "@/lib/api";
 
 const STEPS = ["Contact", "Delivery", "Payment", "Review"];
 const SHIPPING_FALLBACK = [
@@ -46,6 +47,9 @@ export default function Checkout() {
     const [authOpen, setAuthOpen] = useState(false);
     const [placing, setPlacing] = useState(false);
     const [errors, setErrors] = useState({});
+    const [reward, setReward] = useState(null);
+    const [rewardOptions, setRewardOptions] = useState([]);
+    const [quote, setQuote] = useState(null);
 
     const shippingList = (shippingOptions && shippingOptions.length ? shippingOptions : SHIPPING_FALLBACK)
         .map((s) => ({ ...s, Icon: SHIPPING_ICONS[s.id] || Truck }));
@@ -55,7 +59,15 @@ export default function Checkout() {
     const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
 
     const shipCost = shippingList.find((s) => s.id === shipping)?.price || 0;
-    const total = cartSubtotal + shipCost;
+    const total = quote?.total ?? cartSubtotal + shipCost;
+    useEffect(() => {
+        if (isCustomer) api.rewards().then((r) => setRewardOptions(r.items || [])).catch(() => {});
+    }, [isCustomer]);
+
+    useEffect(() => {
+        if (!cartDetailed.length) return;
+        api.quote(shipping, reward?.id).then(setQuote).catch(() => setQuote(null));
+    }, [shipping, reward, cartDetailed.length]);
 
     const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const digits = (v) => (v || "").replace(/\D/g, "");
@@ -123,6 +135,7 @@ export default function Checkout() {
                 province: form.province.trim(),
                 postal_code: form.postal_code.trim(),
                 shipping_method: shipping,
+                reward_id: reward?.id || undefined,
             });
             navigate("/checkout/success");
         } catch (e) {
@@ -272,6 +285,7 @@ export default function Checkout() {
                                             <Check className="h-[18px] w-[18px] text-secondary" strokeWidth={2.4} />
                                         </div>
                                     </div>
+                                    {rewardOptions.length > 0 && <div className="glass-shell rounded-[18px]"><div className="inner-card rounded-[14px] p-3.5"><p className="text-[13px] font-semibold">Apply a redeemed reward</p><select value={reward?.id || ""} onChange={(e) => setReward(rewardOptions.find((r) => r.id === e.target.value) || null)} className="mt-2 w-full rounded-[11px] border border-border bg-white/70 px-3 py-2 text-[12px]"><option value="">No reward</option>{rewardOptions.map((r) => <option key={r.id} value={r.id}>{r.name} · {r.points_cost} points</option>)}</select><p className="mt-1 text-[10.5px] text-muted-foreground">Only rewards already redeemed to your account can be applied.</p></div></div>}
                                     <div className="glass-shell rounded-[18px]">
                                         <div className="impact-glass rounded-[14px] p-4 text-[12.5px] leading-relaxed text-muted-foreground">
                                             After you place the order we&rsquo;ll show YAGI&rsquo;s bank account and your
@@ -311,9 +325,10 @@ export default function Checkout() {
                                                 </div>
                                             ))}
                                             <div className="flex justify-between py-1 text-[12.5px]">
-                                                <span className="text-muted-foreground">Shipping</span>
+                                                 <span className="text-muted-foreground">Shipping</span>
                                                 <span className="font-medium text-foreground">{formatIDR(shipCost)}</span>
-                                            </div>
+                                             </div>
+                                             {!!(quote?.discount) && <div className="flex justify-between py-1 text-[12.5px] text-secondary"><span>Reward</span><span>-{formatIDR(quote.discount)}</span></div>}
                                             <div className="mt-2 flex justify-between border-t border-border/60 pt-2.5">
                                                 <span className="text-[14px] font-semibold text-foreground">Order total</span>
                                                 <span className="text-[16px] font-semibold text-primary">{formatIDR(total)}</span>

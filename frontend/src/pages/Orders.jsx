@@ -26,9 +26,13 @@ const EVENT_MAP = { order_placed: 0, transfer_submitted: 1, payment_confirmed: 2
 
 export default function Orders() {
     const navigate = useNavigate();
-    const { isCustomer, ready } = useYagi();
+    const { isCustomer, ready, addToCart, getProductById } = useYagi();
     const [orders, setOrders] = useState(null);
     const [uploadingFor, setUploadingFor] = useState(null);
+    const [routineBusy, setRoutineBusy] = useState(null);
+    const [reviewing, setReviewing] = useState(null);
+    const [reviewForm, setReviewForm] = useState({ rating: 5, title: "", body: "" });
+    const [reorderBusy, setReorderBusy] = useState(null);
 
     const reload = () =>
         api.getOrders()
@@ -70,6 +74,38 @@ export default function Orders() {
             }
         };
         reader.readAsDataURL(file);
+    };
+
+    const addToRoutine = async (orderNumber, productId) => {
+        setRoutineBusy(`${orderNumber}:${productId}`);
+        try { await api.addPurchasedToRoutine(orderNumber, productId); toast("Added to routine", { description: "Your paid product is now part of your care plan." }); }
+        catch (e) { toast("Couldn’t update your routine", { description: e.message }); }
+        finally { setRoutineBusy(null); }
+    };
+
+    const submitReview = async (orderNumber, productId) => {
+        try {
+            await api.createReview({ order_number: orderNumber, product_id: productId, rating: Number(reviewForm.rating), title: reviewForm.title.trim() || null, body: reviewForm.body.trim() || null });
+            toast("Review submitted", { description: "Thanks for sharing feedback from your purchase." });
+            setReviewing(null); setReviewForm({ rating: 5, title: "", body: "" });
+        } catch (e) { toast("Couldn’t submit your review", { description: e.message }); }
+    };
+
+    const reorder = async (item) => {
+        const product = getProductById(item.product_id);
+        if (!product) {
+            toast("This product is no longer available", { description: "YAGI has not added it to your bag." });
+            return;
+        }
+        const variant = product.variants?.find((v) => v.id === item.variant_id);
+        if (!variant) {
+            toast("That variant is no longer available", { description: "Choose a current variant from the product page." });
+            return;
+        }
+        setReorderBusy(`${item.product_id}:${item.variant_id}`);
+        try { await addToCart(item.product_id, item.variant_id, 1); toast("Added to bag", { description: `Current price: ${formatIDR(variant.price)}` }); }
+        catch (e) { toast("Couldn’t start reorder", { description: e.message }); }
+        finally { setReorderBusy(null); }
     };
 
     const loading = isCustomer && orders === null;
@@ -172,9 +208,10 @@ export default function Orders() {
                                     </p>
                                 )}
                                 {o.payment_status === "paid" && (
-                                    <p className="mt-3 rounded-[10px] bg-pale/60 py-2 text-center text-[11.5px] font-medium text-secondary">
-                                        Payment confirmed
-                                    </p>
+                                    <div className="mt-3 space-y-2 rounded-[12px] bg-pale/50 p-3">
+                                        <p className="text-[11.5px] font-semibold text-secondary">Payment confirmed · purchased products unlocked</p>
+                                        {o.items.map((it) => <div key={it.product_id} className="rounded-[10px] bg-white/60 p-2.5"><div className="flex items-center justify-between gap-2"><span className="text-[11.5px] font-medium">{it.name}</span><span className="text-[10px] text-secondary">Verified purchase</span></div><div className="mt-2 flex flex-wrap gap-2"><button disabled={routineBusy === `${o.order_number}:${it.product_id}`} onClick={() => addToRoutine(o.order_number, it.product_id)} className="flex-1 rounded-[9px] bg-white px-2 py-2 text-[10.5px] font-semibold text-secondary disabled:opacity-50">{routineBusy === `${o.order_number}:${it.product_id}` ? "Saving…" : "Add to routine"}</button><button disabled={reorderBusy === `${it.product_id}:${it.variant_id}`} onClick={() => reorder(it)} className="flex-1 rounded-[9px] bg-white px-2 py-2 text-[10.5px] font-semibold text-secondary disabled:opacity-50">{reorderBusy === `${it.product_id}:${it.variant_id}` ? "Adding…" : "Buy again"}</button><button onClick={() => { setReviewing(`${o.order_number}:${it.product_id}`); setReviewForm({ rating: 5, title: "", body: "" }); }} className="flex-1 rounded-[9px] bg-white px-2 py-2 text-[10.5px] font-semibold text-secondary">Write a review</button></div>{reviewing === `${o.order_number}:${it.product_id}` && <div className="mt-2 space-y-2 border-t border-border/60 pt-2"><select value={reviewForm.rating} onChange={(e) => setReviewForm((f) => ({ ...f, rating: e.target.value }))} className="w-full rounded-[9px] border border-border bg-white px-2 py-2 text-[11px]"><option value="5">5 stars</option><option value="4">4 stars</option><option value="3">3 stars</option><option value="2">2 stars</option><option value="1">1 star</option></select><input value={reviewForm.title} onChange={(e) => setReviewForm((f) => ({ ...f, title: e.target.value }))} maxLength={80} placeholder="Short title (optional)" className="w-full rounded-[9px] border border-border bg-white px-2 py-2 text-[11px]" /><textarea value={reviewForm.body} onChange={(e) => setReviewForm((f) => ({ ...f, body: e.target.value }))} maxLength={1000} rows={3} placeholder="What was your experience?" className="w-full resize-none rounded-[9px] border border-border bg-white px-2 py-2 text-[11px]" /><div className="flex gap-2"><button onClick={() => setReviewing(null)} className="flex-1 rounded-[9px] px-2 py-2 text-[10.5px] font-semibold text-muted-foreground">Cancel</button><button onClick={() => submitReview(o.order_number, it.product_id)} className="btn-green flex-1 rounded-[9px] px-2 py-2 text-[10.5px] font-semibold">Submit</button></div></div>}</div>)}
+                                    </div>
                                 )}
                             </div>
                         </div>

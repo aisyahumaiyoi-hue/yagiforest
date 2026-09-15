@@ -69,6 +69,7 @@ const NAV = [
     { key: "products", label: "Products", icon: Package },
     { key: "users", label: "Users", icon: Users },
     { key: "orders", label: "Orders", icon: ShoppingBag },
+    { key: "reviews", label: "Reviews", icon: BookOpen },
     { key: "knowledge", label: "Knowledge", icon: BookOpen },
     { key: "flags", label: "Feature flags", icon: ToggleRight },
 ];
@@ -94,6 +95,7 @@ export default function Superadmin() {
     const [products, setProducts] = useState([]);
     const [users, setUsers] = useState([]);
     const [orders, setOrders] = useState([]);
+    const [reviews, setReviews] = useState([]);
     const [knowledge, setKnowledge] = useState({ sources: [] });
     const [loading, setLoading] = useState(true);
     const [analytics, setAnalytics] = useState(null);
@@ -114,6 +116,7 @@ export default function Superadmin() {
             api.saProducts().then((r) => setProducts(r.items)).catch(() => {}),
             api.saUsers().then((r) => setUsers(r.items)).catch(() => {}),
             api.saOrders().then((r) => setOrders(r.items)).catch(() => {}),
+            api.saReviews().then((r) => setReviews(r.items)).catch(() => {}),
             api.saKnowledge().then(setKnowledge).catch(() => {}),
         ]);
         setLoading(false);
@@ -191,6 +194,10 @@ export default function Superadmin() {
     const reject = async (n) => {
         const r = window.prompt("Reason for rejection?") || "Invalid proof";
         await api.saReject(n, r); toast.success("Proof rejected"); await load();
+    };
+    const moderateReview = async (id, status) => {
+        try { await api.saModerateReview(id, status); setReviews((items) => items.map((r) => r.id === id ? { ...r, status } : r)); toast.success(`Review ${status}`); }
+        catch (e) { toast.error(e.message); }
     };
 
     const exportOrders = async () => {
@@ -424,6 +431,8 @@ export default function Superadmin() {
                         ))}
                         {orders.length === 0 && <p className="py-10 text-center text-slate-400">No orders yet.</p>}
                     </div>
+                ) : tab === "reviews" ? (
+                    <div className="space-y-3">{reviews.map((r) => <div key={r.id} className="rounded-2xl bg-white p-4 shadow-sm"><div className="flex items-center justify-between gap-3"><div><p className="text-[13px] font-semibold text-slate-900">{r.product_id} · {r.rating}/5</p><p className="text-[11px] text-slate-500">{r.order_number} · {r.verified_purchase ? "Verified purchase" : "Unverified"}</p></div><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600">{r.status || "published"}</span></div><p className="mt-3 text-[13px] text-slate-700">{r.body || r.title || "No written comment"}</p><div className="mt-3 flex gap-2"><button onClick={() => moderateReview(r.id, "published")} className="rounded-lg bg-emerald-50 px-3 py-2 text-[11px] font-semibold text-emerald-700">Publish</button><button onClick={() => moderateReview(r.id, "hidden")} className="rounded-lg bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-700">Hide</button></div></div>)}{reviews.length === 0 && <p className="py-10 text-center text-slate-400">No reviews yet.</p>}</div>
                 ) : tab === "knowledge" ? (
                     <KnowledgePanel knowledge={knowledge} onChanged={load} />
                 ) : null}

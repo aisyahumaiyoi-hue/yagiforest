@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
-    User, Package, Gift, Heart, Leaf, LayoutDashboard, ChevronRight, LogOut, Sparkles,
+    User, Package, Gift, Heart, Leaf, LayoutDashboard, ChevronRight, LogOut, Sparkles, Orbit,
 } from "lucide-react";
 import { MobileShell } from "@/components/yagi/MobileShell";
 import { Wordmark } from "@/components/yagi/Wordmark";
@@ -19,6 +19,7 @@ const SECTIONS = [
     ["Rewards", Gift, "/rewards"],
     ["Saved products", Heart, "/shop"],
     ["My impact", Leaf, "/impact"],
+    ["YAGI Care Loop", Orbit, "/care-loop"],
 ];
 
 export default function Profile() {

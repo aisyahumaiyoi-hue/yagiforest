@@ -19,6 +19,8 @@ import Orders from "@/pages/Orders";
 import AskYagi from "@/pages/AskYagi";
 import Superadmin from "@/pages/Superadmin";
 import CareCheckin from "@/pages/CareCheckin";
+import CareLoop from "@/pages/CareLoop";
+import NotFound from "@/pages/NotFound";
 
 function AppRoutes() {
     return (
@@ -40,7 +42,9 @@ function AppRoutes() {
             <Route path="/impact" element={<Impact />} />
             <Route path="/ask-yagi" element={<AskYagi />} />
             <Route path="/care-checkin" element={<CareCheckin />} />
+            <Route path="/care-loop" element={<CareLoop />} />
             <Route path="/superadmin" element={<Superadmin />} />
+            <Route path="*" element={<NotFound />} />
         </Routes>
     );
 }

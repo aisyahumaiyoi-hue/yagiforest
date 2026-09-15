@@ -189,6 +189,12 @@ export const YagiProvider = ({ children }) => {
         });
     }, [setRoutine]);
 
+    const addPurchasedToRoutine = useCallback(async (orderNumber, productId, period) => {
+        const result = await api.addPurchasedToRoutine(orderNumber, productId, period);
+        setRoutineState(result.steps || []);
+        return result;
+    }, []);
+
     // ---- auth ----
     const login = useCallback(async (email, password) => {
         const res = await api.login({ email, password, anon_token: getToken() });
@@ -267,7 +273,8 @@ export const YagiProvider = ({ children }) => {
         // routine
          routine,
         toggleStep,
-        addToRoutine,
+         addToRoutine,
+         addPurchasedToRoutine,
          setRoutine,
          careProfile,
          recommendations,
@@ -294,7 +301,7 @@ export const YagiProvider = ({ children }) => {
         timezone: config?.timezone || "Asia/Jakarta",
     }), [ready, products, catalogLoaded, identityType, user, login, register, logout, cartDetailed, cartSubtotal,
          cartCount, cartNotice, clearCartNotice, addToCart, updateQty, removeFromCart, saved, toggleSaved, routine,
-          toggleStep, addToRoutine, setRoutine, careProfile, recommendations, saveCareProfile, activateSuggestedRoutine, careCheckins, submitCareCheckin, wellness, reviewStats, lastOrder, setLastOrder, placeOrder,
+           toggleStep, addToRoutine, addPurchasedToRoutine, setRoutine, careProfile, recommendations, saveCareProfile, activateSuggestedRoutine, careCheckins, submitCareCheckin, wellness, reviewStats, lastOrder, setLastOrder, placeOrder,
          resetOrderKey, getProductById, getProductBySlug, config, shipping, isEnabled]);
 
     return <YagiContext.Provider value={value}>{children}</YagiContext.Provider>;

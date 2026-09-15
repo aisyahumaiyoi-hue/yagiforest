@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Sparkles, TrendingUp, Gift, Leaf } from "lucide-react";
+import { toast } from "sonner";
 import { MobileShell } from "@/components/yagi/MobileShell";
 import { TopBar } from "@/components/yagi/TopBar";
 import { useYagi } from "@/store/YagiContext";
@@ -11,11 +12,14 @@ export default function Rewards() {
     const { isCustomer, user } = useYagi();
     const [data, setData] = useState(null);
     const [tiers, setTiers] = useState([]);
+    const [rewards, setRewards] = useState(null);
+    const [redeeming, setRedeeming] = useState(null);
 
     useEffect(() => {
         if (isCustomer) {
             api.loyalty().then(setData).catch(() => {});
             api.config().then((c) => setTiers(c.tiers || [])).catch(() => {});
+            api.rewards().then(setRewards).catch(() => {});
         }
     }, [isCustomer]);
 
@@ -37,6 +41,17 @@ export default function Rewards() {
     const nextThreshold = tiers.find((t) => t.threshold > lifetime)?.threshold;
     const prevThreshold = [...tiers].reverse().find((t) => t.threshold <= lifetime)?.threshold ?? 0;
     const pct = nextThreshold ? Math.min(100, Math.round(((lifetime - prevThreshold) / (nextThreshold - prevThreshold)) * 100)) : 100;
+    const redeem = async (reward) => {
+        setRedeeming(reward.id);
+        try {
+            const key = globalThis.crypto?.randomUUID?.() || `redeem_${Date.now()}`;
+            const result = await api.redeem(reward.id, key);
+            toast.success("Reward redeemed", { description: `${result.reward.name} is ready for checkout.` });
+            const [nextLoyalty, nextRewards] = await Promise.all([api.loyalty(), api.rewards()]);
+            setData(nextLoyalty); setRewards(nextRewards);
+        } catch (e) { toast.error("Couldn’t redeem that reward", { description: e.message }); }
+        finally { setRedeeming(null); }
+    };
 
     return (
         <MobileShell nav={false}>
@@ -81,6 +96,17 @@ export default function Rewards() {
                             </div>
                         </div>
                     ))}
+                </div>
+
+                <div>
+                    <p className="mb-2 text-[13.5px] font-semibold text-foreground">Available rewards</p>
+                    <div className="flex flex-col gap-2">
+                        {(rewards?.catalog || []).map((reward) => {
+                            const canRedeem = (data?.available || 0) >= reward.points_cost;
+                            return <div key={reward.id} className="glass-shell rounded-[18px]"><div className="inner-card flex items-center gap-3 rounded-[14px] p-3.5"><Gift className="h-5 w-5 text-secondary" /><div className="min-w-0 flex-1"><p className="text-[13px] font-semibold">{reward.name}</p><p className="text-[11px] text-muted-foreground">{reward.description} · {reward.points_cost} points</p></div><button disabled={!canRedeem || redeeming === reward.id} onClick={() => redeem(reward)} className="rounded-[11px] bg-pale px-3 py-2 text-[11px] font-semibold text-secondary disabled:opacity-50">{redeeming === reward.id ? "Redeeming…" : canRedeem ? "Redeem" : "Not yet"}</button></div></div>;
+                        })}
+                        {rewards && !rewards.items?.length && <p className="rounded-[14px] bg-pale/50 p-4 text-center text-[12px] text-muted-foreground">No rewards are available right now.</p>}
+                    </div>
                 </div>
 
                 {/* Tiers */}

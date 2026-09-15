@@ -10,10 +10,13 @@ from pydantic import BaseModel, Field, EmailStr, model_validator
 from typing import List, Optional
 import uuid
 import jwt
+import base64
+import binascii
 from pymongo.errors import DuplicateKeyError
 from datetime import datetime, timezone, timedelta
 from passlib.context import CryptContext
 from zoneinfo import ZoneInfo
+from urllib.parse import urlparse
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -21,9 +24,20 @@ load_dotenv(ROOT_DIR / ".env")
 APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
 IS_PRODUCTION = APP_ENV == "production"
 
-mongo_url = os.environ["MONGO_URL"]
+mongo_url = os.environ.get("MONGO_URL", "").strip()
+DB_NAME = os.environ.get("DB_NAME", "").strip()
+if not mongo_url or not DB_NAME:
+    raise RuntimeError("MONGO_URL and DB_NAME are required.")
+if IS_PRODUCTION:
+    mongo_host = (urlparse(mongo_url).hostname or "").lower()
+    if mongo_host in {"localhost", "127.0.0.1", "::1"}:
+        raise RuntimeError("Production MONGO_URL must not point to a local database.")
+    if "test" in DB_NAME.lower():
+        raise RuntimeError("Production DB_NAME must not be a test database.")
+    if os.environ.get("SEED_DEMO_DATA", "0") == "1":
+        raise RuntimeError("SEED_DEMO_DATA must remain disabled in production.")
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ["DB_NAME"]]
+db = client[DB_NAME]
 
 JWT_SECRET = os.environ.get("JWT_SECRET", "")
 if not JWT_SECRET or JWT_SECRET == "dev_secret":
@@ -40,6 +54,8 @@ JWT_ALG = "HS256"
 SHITERU_API_KEY = os.environ.get("SHITERU_API_KEY", "")
 SHITERU_BASE_URL = os.environ.get("SHITERU_BASE_URL", "https://shiteru.id/v1")
 SHITERU_MODEL = os.environ.get("SHITERU_MODEL", "deepseek-v4-flash")
+if SHITERU_API_KEY and (not SHITERU_BASE_URL.startswith(("https://", "http://")) or not SHITERU_MODEL.strip()):
+    raise RuntimeError("SHITERU_BASE_URL and SHITERU_MODEL must be valid when SHITERU_API_KEY is configured.")
 SUPERADMIN_EMAILS = [e.strip().lower() for e in os.environ.get("SUPERADMIN_EMAILS", "").split(",") if e.strip()]
 AI_ANON_RPH = int(os.environ.get("AI_ANON_REQUESTS_PER_HOUR", "15"))
 AI_USER_RPH = int(os.environ.get("AI_USER_REQUESTS_PER_HOUR", "60"))
@@ -48,6 +64,7 @@ AI_MAX_HISTORY = int(os.environ.get("AI_MAX_HISTORY_MESSAGES", "8"))
 CARE_CHECKIN_INTERVAL_DAYS = max(1, int(os.environ.get("CARE_CHECKIN_INTERVAL_DAYS", "7")))
 AUTH_LOGIN_RPH = int(os.environ.get("AUTH_LOGIN_ATTEMPTS_PER_HOUR", "20"))
 AUTH_REGISTER_RPH = int(os.environ.get("AUTH_REGISTER_ATTEMPTS_PER_HOUR", "10"))
+PAYMENT_PROOF_RPH = int(os.environ.get("PAYMENT_PROOF_ATTEMPTS_PER_HOUR", "10"))
 pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # ----------------------------------------------------------------------------
@@ -455,6 +472,30 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+# Evidence records must state their origin. Missing legacy metadata is treated
+# as unverifiable rather than being assumed to represent production activity.
+DATA_CLASSIFICATIONS = {"real", "demo", "test", "unverifiable_legacy"}
+
+
+def data_classification_for(document):
+    value = (document or {}).get("data_classification")
+    return value if value in DATA_CLASSIFICATIONS else "unverifiable_legacy"
+
+
+def is_real_evidence(document):
+    return data_classification_for(document) == "real"
+
+
+def _parse_evidence_timestamp(raw):
+    if not raw:
+        return None
+    try:
+        value = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
 def _looks_like_phone(value, min_digits=8, max_digits=15):
     """Loose but real validation for an Indonesian delivery phone number."""
     digits = "".join(ch for ch in (value or "") if ch.isdigit())
@@ -621,6 +662,7 @@ class CareCheckinIn(BaseModel):
 
 class QuoteIn(BaseModel):
     shipping_method: str = "regular"
+    reward_id: Optional[str] = None
 
 
 class PlaceOrderIn(BaseModel):
@@ -633,6 +675,7 @@ class PlaceOrderIn(BaseModel):
     postal_code: str = Field(min_length=1, max_length=16)
     shipping_method: str = "regular"
     idempotency_key: Optional[str] = Field(default=None, max_length=80)
+    reward_id: Optional[str] = None
 
 
 class ProfileIn(BaseModel):
@@ -704,6 +747,12 @@ async def root():
     return {"message": "YAGI API", "status": "ok"}
 
 
+@api.get("/health")
+async def health():
+    """Public liveness check without database or provider details."""
+    return {"status": "ok", "service": "yagi-api", "environment": APP_ENV}
+
+
 @api.get("/config")
 async def config():
     return {
@@ -758,7 +807,7 @@ async def _product_stats(items):
     if not ids:
         return {}
     pipeline = [
-        {"$match": {"product_id": {"$in": ids}}},
+        {"$match": {"product_id": {"$in": ids}, "status": "published"}},
         {"$group": {"_id": "$product_id", "count": {"$sum": 1}, "avg": {"$avg": "$rating"}}},
     ]
     out = {}
@@ -1053,9 +1102,10 @@ async def create_care_checkin(body: CareCheckinIn, ident=Depends(require_identit
     if existing:
         return {**existing, "duplicate": True, "overall_feeling_label": _checkin_label(existing.get("overall_feeling"), CARE_CHECKIN_FEELINGS)}
     doc = {"id": uuid.uuid4().hex, "user_id": ident["user_id"], "routine_id": None,
-           "check_in_date": date_key, "overall_feeling": body.overall_feeling,
-           "routine_experience": body.routine_experience, "optional_note": (body.optional_note or "").strip() or None,
-           "source": body.source, "safety_state": "NORMAL", "created_at": now_iso(), "updated_at": now_iso()}
+            "check_in_date": date_key, "overall_feeling": body.overall_feeling,
+            "routine_experience": body.routine_experience, "optional_note": (body.optional_note or "").strip() or None,
+            "source": body.source, "safety_state": "NORMAL", "data_classification": "real",
+            "created_at": now_iso(), "updated_at": now_iso()}
     # Notes are private care data. Safety is evaluated here, but raw text is not
     # copied into analytics or safety records.
     safety = CareSafetyService().evaluate(doc.get("optional_note") or "", {}) if flag_enabled("care_safety_enabled") else {"level": "NORMAL"}
@@ -1065,7 +1115,7 @@ async def create_care_checkin(body: CareCheckinIn, ident=Depends(require_identit
     except DuplicateKeyError:
         existing = await db.care_checkins.find_one({"user_id": ident["user_id"], "check_in_date": date_key}, {"_id": 0})
         return {**existing, "duplicate": True}
-    await db.phase3_events.insert_one({"event": "care_checkin_completed", "identity_id": ident["user_id"], "identity_type": ident["typ"], "source": body.source, "overall_feeling": body.overall_feeling, "routine_experience": body.routine_experience, "created_at": now_iso()})
+    await db.phase3_events.insert_one({"event": "care_checkin_completed", "identity_id": ident["user_id"], "identity_type": ident["typ"], "source": body.source, "overall_feeling": body.overall_feeling, "routine_experience": body.routine_experience, "data_classification": "real", "created_at": now_iso()})
     if safety["level"] != "NORMAL":
         await db.safety_events.insert_one({"id": uuid.uuid4().hex, "identity_id": ident["user_id"], "conversation_id": None, "category": safety.get("category"), "safety_level": safety["level"], "trigger_source": "checkin_note", "created_at": now_iso()})
     return {**{k: v for k, v in doc.items() if k != "user_id"}, "overall_feeling_label": _checkin_label(body.overall_feeling, CARE_CHECKIN_FEELINGS), "routine_experience_label": _checkin_label(body.routine_experience, CARE_ROUTINE_EXPERIENCES), "safety": safety}
@@ -1088,8 +1138,11 @@ async def checkout_quote(body: QuoteIn, ident=Depends(require_identity)):
     if not detail["items"]:
         raise HTTPException(status_code=400, detail="Your bag is empty")
     ship = SHIPPING.get(body.shipping_method, SHIPPING["regular"])["price"]
-    return {"subtotal": detail["subtotal"], "shipping": ship, "discount": 0,
-            "total": detail["subtotal"] + ship, "count": detail["count"]}
+    reward = await _get_owned_reward(ident["user_id"], body.reward_id) if body.reward_id else None
+    discount = _reward_discount(reward, detail["subtotal"], ship) if reward else 0
+    return {"subtotal": detail["subtotal"], "shipping": ship, "discount": discount,
+            "total": max(0, detail["subtotal"] + ship - discount), "count": detail["count"],
+            "reward": _reward_snapshot(reward, discount) if reward else None}
 
 
 @api.post("/orders")
@@ -1129,8 +1182,18 @@ async def place_order(body: PlaceOrderIn, ident=Depends(require_customer)):
 
     ship = SHIPPING.get(body.shipping_method, SHIPPING["regular"])
     subtotal = detail["subtotal"]
-    total = subtotal + ship["price"]
+    reward = await _get_owned_reward(ident["user_id"], body.reward_id) if body.reward_id else None
+    discount = _reward_discount(reward, subtotal, ship["price"]) if reward else 0
+    total = max(0, subtotal + ship["price"] - discount)
     order_number = "YG-" + business_now().strftime("%y%m%d") + "-" + uuid.uuid4().hex[:4].upper()
+    if reward:
+        reserved = await db.reward_redemptions.update_one(
+            {"id": reward["id"], "user_id": ident["user_id"], "status": "issued"},
+            {"$set": {"status": "reserved", "reserved_at": now_iso(),
+                       "reservation_order_number": order_number}},
+        )
+        if reserved.modified_count != 1:
+            raise HTTPException(status_code=409, detail="That reward is already being used. Please refresh checkout.")
     points_earned = total // 1000  # 1 point per Rp1.000, server-computed
     lower_waste_items = sum(i["qty"] for i in detail["items"] if CATALOG_BY_ID.get(i["product_id"], {}).get("lower_waste"))
     impact_metrics = _compute_impact_metrics(detail["items"])
@@ -1140,8 +1203,9 @@ async def place_order(body: PlaceOrderIn, ident=Depends(require_customer)):
         # `status` reflects fulfilment progress; payment is tracked separately so
         # "order created" is never presented as "payment confirmed".
         "status": "order_created", "payment_status": "awaiting_transfer", "fulfillment_status": "unfulfilled",
-        "currency": "IDR", "subtotal": subtotal, "shipping_total": ship["price"], "discount_total": 0,
+        "currency": "IDR", "subtotal": subtotal, "shipping_total": ship["price"], "discount_total": discount,
         "grand_total": total,
+        "reward": _reward_snapshot(reward, discount) if reward else None,
         "items": [{"product_id": i["product_id"], "variant_id": i["variant_id"], "name": i["product"]["name"],
                     "short_name": i["product"]["short_name"], "image": i["product"]["image"],
                     "variant_label": i["variant_label"], "unit_price": i["price"], "qty": i["qty"],
@@ -1157,11 +1221,13 @@ async def place_order(body: PlaceOrderIn, ident=Depends(require_customer)):
         "points_earned": points_earned,
         "events": [{"type": "order_placed", "at": now_iso()}],
         "idempotency_key": idem_key,
-        "placed_at": now_iso(), "created_at": now_iso(), "updated_at": now_iso(),
+        "data_classification": "real", "placed_at": now_iso(), "created_at": now_iso(), "updated_at": now_iso(),
     }
     try:
         await db.orders.insert_one(dict(order))
     except DuplicateKeyError:
+        if reward:
+            await db.reward_redemptions.update_one({"id": reward["id"], "status": "reserved"}, {"$set": {"status": "issued"}, "$unset": {"reserved_at": ""}})
         # Concurrent duplicate submission won the race - return that order.
         existing = await db.orders.find_one(
             {"user_id": ident["user_id"], "idempotency_key": idem_key}, {"_id": 0}
@@ -1170,6 +1236,10 @@ async def place_order(body: PlaceOrderIn, ident=Depends(require_customer)):
             existing.pop("payment_proof", None)
             return existing
         raise HTTPException(status_code=409, detail="This order was already placed. Check your orders.")
+
+    if reward:
+        await db.reward_redemptions.update_one({"id": reward["id"], "status": "reserved"},
+                                               {"$set": {"status": "used", "used_order_number": order_number, "used_at": now_iso()}})
 
     # Immutable loyalty ledger entry (pending until payment confirmed). Server-only.
     await db.loyalty_ledger.insert_one({
@@ -1190,7 +1260,7 @@ async def place_order(body: PlaceOrderIn, ident=Depends(require_customer)):
         "co2eq_kg_avoided": impact_metrics["co2eq_kg_avoided"],
         "water_litres_saved": impact_metrics["water_litres_saved"],
         "local_producers_supported": impact_metrics["local_producers_supported"],
-        "methodology_version": 1, "created_at": now_iso(),
+        "methodology_version": 1, "status": "pending", "data_classification": "real", "created_at": now_iso(),
     })
 
     await save_cart(ident["user_id"], [])  # cart converted
@@ -1204,12 +1274,67 @@ async def list_orders(ident=Depends(require_customer)):
     return {"items": orders}
 
 
+@api.get("/orders/reorderable")
+async def reorderable_orders(ident=Depends(require_customer)):
+    orders = await db.orders.find({"user_id": ident["user_id"], "payment_status": "paid"}, {"_id": 0}).sort("placed_at", -1).to_list(100)
+    out = []
+    for order in orders:
+        for item in order.get("items", []):
+            product = CATALOG_BY_ID.get(item.get("product_id"))
+            price, label = variant_price(product, item.get("variant_id")) if product else (None, None)
+            out.append({"product_id": item.get("product_id"), "variant_id": item.get("variant_id"),
+                        "name": item.get("name"), "order_number": order["order_number"],
+                        "available": bool(product and product_is_public(product) and price is not None),
+                        "current_price": price, "current_variant_label": label,
+                        "slug": product.get("slug") if product else None})
+    return {"items": out}
+
+
 @api.get("/orders/{order_number}")
 async def order_detail(order_number: str, ident=Depends(require_customer)):
     order = await db.orders.find_one({"order_number": order_number, "user_id": ident["user_id"]}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
+
+
+class PurchasedRoutineIn(BaseModel):
+    product_id: str
+    period: Optional[str] = None
+
+
+@api.post("/orders/{order_number}/routine")
+async def add_purchased_product_to_routine(order_number: str, body: PurchasedRoutineIn, ident=Depends(require_customer)):
+    order = await db.orders.find_one({"order_number": order_number, "user_id": ident["user_id"]}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("payment_status") != "paid":
+        raise HTTPException(status_code=403, detail="This product is not owned until payment is confirmed.")
+    item = next((i for i in order.get("items", []) if i.get("product_id") == body.product_id), None)
+    product = CATALOG_BY_ID.get(body.product_id)
+    if not item or not product or not product_is_public(product):
+        raise HTTPException(status_code=400, detail="That purchased product is unavailable for routine placement.")
+    period = body.period or ("morning" if product.get("routine_stage") == "cleanse" else "evening")
+    if period not in {"morning", "evening"}:
+        raise HTTPException(status_code=422, detail="Routine period must be morning or evening.")
+    routine = await db.routines.find_one({"user_id": ident["user_id"]}, {"_id": 0}) or {"steps": []}
+    steps = list(routine.get("steps", []))
+    if any(s.get("productId") == body.product_id and s.get("period") == period for s in steps):
+        return {"steps": steps, "already_present": True}
+    role = product.get("routine_stage")
+    if role not in {"cleanse", "treat", "moisturize", "protect"}:
+        raise HTTPException(status_code=400, detail="Routine placement isn't configured for this product yet.")
+    labels = {"cleanse": "Cleanse", "treat": "Treat", "moisturize": "Moisturize", "protect": "Protect"}
+    steps.append({"id": "purchase-" + uuid.uuid4().hex[:10], "order": len([s for s in steps if s.get("period") == period]) + 1,
+                  "period": period, "stage": labels[role], "productId": body.product_id, "title": labels[role],
+                  "instruction": product.get("usage") or "Apply as directed", "completed": False,
+                  "source": "paid_order", "order_number": order_number, "added_at": now_iso()})
+    result = await put_routine(RoutineIn(steps=steps), ident)
+    await db.phase4_events.insert_one({"event": "purchased_product_added_to_routine", "identity_id": ident["user_id"],
+                                       "order_number": order_number, "product_id": body.product_id,
+                                       "data_classification": "real", "created_at": now_iso()})
+    return {"steps": result["steps"], "already_present": False}
+
 
 # ----------------------------------------------------------------------------
 # Routes: loyalty & profile
@@ -1270,7 +1395,7 @@ async def _record_routine_activity(user_id, steps):
     completed = sum(1 for s in steps if s.get("completed"))
     await db.routine_activity.update_one(
         {"user_id": user_id, "date": _today_str()},
-        {"$set": {"completed": completed, "total": total, "updated_at": now_iso()}},
+        {"$set": {"completed": completed, "total": total, "data_classification": "real", "updated_at": now_iso()}},
         upsert=True,
     )
 
@@ -1428,6 +1553,61 @@ REWARDS_CATALOG = [
     {"id": "rw_refill_bonus", "name": "Bonus refill points", "description": "Early access to refill drops", "points_cost": 800, "reward_type": "perk", "reward_value": 0},
 ]
 
+def _reward_public(redemption):
+    if not redemption:
+        return None
+    reward = next((r for r in REWARDS_CATALOG if r["id"] == redemption.get("reward_id")), None)
+    return {"id": redemption.get("id"), "reward_id": redemption.get("reward_id"),
+            "voucher_code": redemption.get("voucher_code"), "status": redemption.get("status"),
+            "reward": reward} if reward else None
+
+
+async def _get_owned_reward(user_id, reward_id):
+    if not reward_id:
+        return None
+    reward = next((r for r in REWARDS_CATALOG if r["id"] == reward_id), None)
+    if not reward:
+        raise HTTPException(status_code=404, detail="Reward not found")
+    redemption = await db.reward_redemptions.find_one(
+        {"user_id": user_id, "reward_id": reward_id, "status": {"$in": ["issued", "reserved"]}},
+        {"_id": 0}, sort=[("created_at", 1)])
+    if not redemption:
+        raise HTTPException(status_code=400, detail="That reward is not available to this account.")
+    if redemption.get("status") == "reserved":
+        order_exists = await db.orders.count_documents({
+            "order_number": redemption.get("reservation_order_number"),
+            "user_id": user_id,
+        }, limit=1)
+        if not order_exists:
+            await db.reward_redemptions.update_one(
+                {"id": redemption["id"], "status": "reserved"},
+                {"$set": {"status": "issued", "recovered_at": now_iso()},
+                 "$unset": {"reserved_at": "", "reservation_order_number": ""}},
+            )
+            redemption["status"] = "issued"
+        else:
+            raise HTTPException(status_code=409, detail="That reward is already being used. Please refresh checkout.")
+    return {**redemption, "definition": reward}
+
+
+def _reward_discount(redemption, subtotal, shipping):
+    reward = (redemption or {}).get("definition") or {}
+    if reward.get("reward_type") == "voucher":
+        return min(int(reward.get("reward_value", 0)), subtotal + shipping)
+    if reward.get("reward_type") == "shipping":
+        return min(shipping, subtotal + shipping)
+    raise HTTPException(status_code=400, detail="That reward cannot be applied at checkout.")
+
+
+def _reward_snapshot(redemption, discount):
+    if not redemption:
+        return None
+    reward = redemption["definition"]
+    return {"redemption_id": redemption["id"], "reward_id": reward["id"],
+            "voucher_code": redemption.get("voucher_code"), "name": reward["name"],
+            "reward_type": reward["reward_type"], "configured_value": reward.get("reward_value", 0),
+            "discount": discount}
+
 async def _seed_demo_data():
     """Seed realistic demo data (dev/competition demo only) when DB is empty.
 
@@ -1510,14 +1690,16 @@ async def _seed_demo_data():
                 "bank_account": BANK_ACCOUNT,
                 "impact": {"lower_waste_items": lower_waste_units, "plastic_avoided": lower_waste_units, **impact_metrics},
                 "points_earned": points, "placed_at": placed.isoformat(), "created_at": placed.isoformat(),
-                "updated_at": placed.isoformat()})
+                "updated_at": placed.isoformat(), "data_classification": "demo",
+                "payment_confirmed_at": placed.isoformat() if pstatus == "paid" else None})
             await db.impact_ledger.insert_one({
                 "id": uuid.uuid4().hex, "user_id": uid, "order_number": onum,
                 "plastic_avoided": lower_waste_units, "plastic_grams_avoided": impact_metrics["plastic_grams_avoided"],
                 "co2eq_kg_avoided": impact_metrics["co2eq_kg_avoided"],
                 "water_litres_saved": impact_metrics["water_litres_saved"],
                 "local_producers_supported": impact_metrics["local_producers_supported"],
-                "methodology_version": 1, "created_at": placed.isoformat()})
+                "methodology_version": 1, "created_at": placed.isoformat(),
+                "status": "released" if pstatus == "paid" else "pending", "data_classification": "demo"})
             if pstatus == "paid":
                 await db.loyalty_accounts.update_one({"user_id": uid},
                     {"$inc": {"available_points": points, "lifetime_points": points}}, upsert=True)
@@ -1538,7 +1720,8 @@ async def _seed_demo_data():
                     "id": uuid.uuid4().hex, "user_id": o["user_id"], "product_id": item["product_id"],
                     "order_number": o["order_number"], "rating": rnd.choice([4, 4, 5, 5, 5, 3]),
                     "title": rnd.choice(["Recommended", "Bagus banget", "Cocok di kulit", "Worth it"]),
-                    "body": rnd.choice(review_texts), "created_at": o["placed_at"]})
+                    "body": rnd.choice(review_texts), "verified_purchase": True,
+                    "status": "published", "data_classification": "demo", "created_at": o["placed_at"]})
     for p in CATALOG:
         await _recompute_product_rating(p["id"])
 
@@ -1615,7 +1798,12 @@ async def _seed_and_index():
         ("products.id", db.products.create_index("id"), False),
         ("reviews.product_id+created_at", db.reviews.create_index([("product_id", 1), ("created_at", -1)]), False),
         ("reviews.user_id+order_number+product_id",
-         db.reviews.create_index([("user_id", 1), ("order_number", 1), ("product_id", 1)], unique=True), True),
+          db.reviews.create_index([("user_id", 1), ("order_number", 1), ("product_id", 1)], unique=True), True),
+        ("reward_redemptions.user_id+idempotency_key",
+         db.reward_redemptions.create_index([("user_id", 1), ("idempotency_key", 1)], unique=True,
+                                            partialFilterExpression={"idempotency_key": {"$type": "string"}}), True),
+        ("reward_redemptions.user_id+status",
+         db.reward_redemptions.create_index([("user_id", 1), ("status", 1), ("created_at", 1)]), False),
         ("impact_ledger.user_id+created_at", db.impact_ledger.create_index([("user_id", 1), ("created_at", -1)]), False),
         ("routine_activity.user_id+date", db.routine_activity.create_index([("user_id", 1), ("date", 1)]), False),
         ("care_checkins.user_id+date", db.care_checkins.create_index([("user_id", 1), ("check_in_date", -1)]), False),
@@ -1804,7 +1992,7 @@ async def ai_chat(body: AskIn, ident=Depends(require_identity)):
         await db.ai_conversations.insert_one({"id": conv_id, "identity_id": ident["user_id"],
             "user_id": ident["user_id"] if ident["typ"] == "customer" else None,
             "title": q[:40], "context_type": body.context_type or "general",
-            "created_at": now_iso(), "updated_at": now_iso()})
+            "data_classification": "real", "created_at": now_iso(), "updated_at": now_iso()})
     else:
         # Only the owner of a conversation may append to it.
         owned = await db.ai_conversations.find_one(
@@ -1815,9 +2003,9 @@ async def ai_chat(body: AskIn, ident=Depends(require_identity)):
             await db.ai_conversations.insert_one({"id": conv_id, "identity_id": ident["user_id"],
                 "user_id": ident["user_id"] if ident["typ"] == "customer" else None,
                 "title": q[:40], "context_type": body.context_type or "general",
-                "created_at": now_iso(), "updated_at": now_iso()})
+                "data_classification": "real", "created_at": now_iso(), "updated_at": now_iso()})
     await db.ai_messages.insert_one({"id": uuid.uuid4().hex, "conversation_id": conv_id, "role": "user",
-        "content": q, "created_at": now_iso()})
+        "content": q, "data_classification": "real", "created_at": now_iso()})
 
     # grounding context
     products = []
@@ -1917,7 +2105,7 @@ async def ai_chat(body: AskIn, ident=Depends(require_identity)):
     safety = {"medical": intent["health"], "escalation": escalate, "level": safety["level"], "category": safety.get("category")}
     await db.ai_messages.insert_one({"id": uuid.uuid4().hex, "conversation_id": conv_id, "role": "assistant",
         "content": answer, "citations": citations, "product_refs": product_refs, "model": SHITERU_MODEL,
-        "safety": safety, "created_at": now_iso()})
+        "safety": safety, "data_classification": "real", "created_at": now_iso()})
     await db.ai_conversations.update_one({"id": conv_id}, {"$set": {"updated_at": now_iso()}})
     await db.ai_usage_events.insert_one({"id": uuid.uuid4().hex, "identity": ident["user_id"], "conversation_id": conv_id,
          "model": SHITERU_MODEL, "intent": intent, "sources": len(citations), "status": "ok", "created_at": now_iso()})
@@ -1963,16 +2151,32 @@ def validate_proof_payload(image_data):
         raise HTTPException(status_code=413, detail="That image is too large. Please use one under 3 MB.")
     if not image_data.startswith(PROOF_DATA_URL_PREFIX):
         raise HTTPException(status_code=400, detail="Transfer proof must be an image file (JPG, PNG or WEBP).")
-    header = image_data.split(",", 1)[0].lower()
+    header, encoded = image_data.split(",", 1) if "," in image_data else ("", "")
+    header = header.lower()
     if not any(t in header for t in PROOF_ALLOWED_TYPES):
         raise HTTPException(status_code=400, detail="Transfer proof must be a JPG, PNG or WEBP image.")
-    if "," not in image_data or len(image_data.split(",", 1)[1]) < 32:
+    if len(encoded) < 32:
         raise HTTPException(status_code=400, detail="That image looks empty. Please upload it again.")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        raise HTTPException(status_code=400, detail="That image could not be read. Please upload it again.")
+    declared_type = next((content_type for content_type in PROOF_ALLOWED_TYPES if content_type in header), None)
+    signatures = {
+        "image/jpeg": (b"\xff\xd8\xff",), "image/png": (b"\x89PNG\r\n\x1a\n",),
+        "image/webp": (b"RIFF",), "image/heic": (b"\x00\x00\x00",), "image/heif": (b"\x00\x00\x00",),
+    }
+    if not declared_type or not raw.startswith(signatures[declared_type]):
+        raise HTTPException(status_code=400, detail="The file content does not match the selected image type.")
+    if declared_type == "image/webp" and raw[8:12] != b"WEBP":
+        raise HTTPException(status_code=400, detail="The file content does not match the selected image type.")
     return image_data
 
 
 @api.post("/orders/{order_number}/proof")
 async def submit_proof(order_number: str, body: ProofIn, ident=Depends(require_customer)):
+    _enforce_rate_limit("payment_proof", ident["user_id"], PAYMENT_PROOF_RPH,
+                        "Too many transfer-proof submissions. Please try again later.")
     order = await db.orders.find_one({"order_number": order_number, "user_id": ident["user_id"]})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -2024,13 +2228,26 @@ async def del_address(aid: str, ident=Depends(require_customer)):
 @api.get("/rewards")
 async def rewards_list(ident=Depends(require_customer)):
     la = await db.loyalty_accounts.find_one({"user_id": ident["user_id"]}, {"_id": 0}) or {"available_points": 0}
-    return {"items": REWARDS_CATALOG, "available_points": la.get("available_points", 0)}
+    issued = await db.reward_redemptions.find({"user_id": ident["user_id"], "status": "issued"}, {"_id": 0}).sort("created_at", 1).to_list(100)
+    items = []
+    for redemption in issued:
+        definition = next((r for r in REWARDS_CATALOG if r["id"] == redemption.get("reward_id")), None)
+        if definition:
+            items.append({**definition, "redemption_id": redemption["id"], "voucher_code": redemption.get("voucher_code")})
+    return {"items": items, "catalog": REWARDS_CATALOG, "available_points": la.get("available_points", 0)}
 
 class RedeemIn(BaseModel):
     reward_id: str
+    idempotency_key: Optional[str] = Field(default=None, max_length=80)
 
 @api.post("/rewards/redeem")
 async def redeem(body: RedeemIn, ident=Depends(require_customer)):
+    if body.idempotency_key:
+        prior = await db.reward_redemptions.find_one(
+            {"user_id": ident["user_id"], "idempotency_key": body.idempotency_key}, {"_id": 0})
+        if prior:
+            reward = next((r for r in REWARDS_CATALOG if r["id"] == prior.get("reward_id")), None)
+            return {"voucher_code": prior.get("voucher_code"), "reward": reward, "redemption_id": prior.get("id"), "already": True}
     reward = next((r for r in REWARDS_CATALOG if r["id"] == body.reward_id), None)
     if not reward:
         raise HTTPException(status_code=404, detail="Reward not found")
@@ -2038,13 +2255,34 @@ async def redeem(body: RedeemIn, ident=Depends(require_customer)):
     if la.get("available_points", 0) < reward["points_cost"]:
         raise HTTPException(status_code=400, detail="Not enough points yet.")
     voucher = "YG" + uuid.uuid4().hex[:8].upper()
-    await db.loyalty_ledger.insert_one({"id": uuid.uuid4().hex, "user_id": ident["user_id"], "event_type": "reward_redeemed",
-        "points_delta": -reward["points_cost"], "status": "redeemed", "reward_id": reward["id"], "created_at": now_iso()})
-    await db.loyalty_accounts.update_one({"user_id": ident["user_id"]},
-        {"$inc": {"available_points": -reward["points_cost"]}, "$set": {"updated_at": now_iso()}})
-    await db.reward_redemptions.insert_one({"id": uuid.uuid4().hex, "user_id": ident["user_id"], "reward_id": reward["id"],
-        "points_spent": reward["points_cost"], "voucher_code": voucher, "status": "issued", "created_at": now_iso()})
-    return {"voucher_code": voucher, "reward": reward}
+    redemption_id = uuid.uuid4().hex
+    redemption_doc = {"id": redemption_id, "user_id": ident["user_id"], "reward_id": reward["id"],
+                      "points_spent": reward["points_cost"], "voucher_code": voucher, "status": "pending",
+                      "idempotency_key": body.idempotency_key, "created_at": now_iso()}
+    try:
+        await db.reward_redemptions.insert_one(redemption_doc)
+        # The conditional decrement is the concurrency guard. A duplicate
+        # idempotency key fails before any points are touched.
+        debited = await db.loyalty_accounts.update_one(
+            {"user_id": ident["user_id"], "available_points": {"$gte": reward["points_cost"]}},
+            {"$inc": {"available_points": -reward["points_cost"]}, "$set": {"updated_at": now_iso()}},
+        )
+        if debited.modified_count != 1:
+            raise HTTPException(status_code=400, detail="Not enough points yet.")
+        await db.loyalty_ledger.insert_one({"id": uuid.uuid4().hex, "user_id": ident["user_id"], "event_type": "reward_redeemed",
+            "points_delta": -reward["points_cost"], "status": "redeemed", "reward_id": reward["id"],
+            "redemption_id": redemption_id, "created_at": now_iso()})
+        await db.reward_redemptions.update_one({"id": redemption_id}, {"$set": {"status": "issued"}})
+    except HTTPException:
+        await db.reward_redemptions.delete_one({"id": redemption_id})
+        raise
+    except Exception:
+        await db.loyalty_accounts.update_one({"user_id": ident["user_id"]}, {"$inc": {"available_points": reward["points_cost"]}})
+        await db.reward_redemptions.delete_one({"id": redemption_id})
+        raise
+    await db.phase4_events.insert_one({"event": "reward_redeemed", "identity_id": ident["user_id"],
+                                       "reward_id": reward["id"], "redemption_id": redemption_id, "created_at": now_iso()})
+    return {"voucher_code": voucher, "reward": reward, "redemption_id": redemption_id}
 
 # ---- superadmin: product management ----
 class ProductIn(BaseModel):
@@ -2260,7 +2498,7 @@ async def sa_approve(body: ApproveIn, ident=Depends(require_superadmin)):
     # if two admins click at the same moment.
     claimed = await db.orders.update_one(
         {"order_number": body.order_number, "payment_status": {"$ne": "paid"}},
-        {"$set": {"payment_status": "paid", "status": "confirmed", "updated_at": now_iso()},
+        {"$set": {"payment_status": "paid", "status": "confirmed", "payment_confirmed_at": now_iso(), "updated_at": now_iso()},
          "$push": {"events": {"type": "payment_confirmed", "at": now_iso()}}},
     )
     if claimed.modified_count == 0:
@@ -2278,6 +2516,10 @@ async def sa_approve(body: ApproveIn, ident=Depends(require_superadmin)):
         await db.loyalty_accounts.update_one({"user_id": order["user_id"]},
             {"$inc": {"available_points": pts, "lifetime_points": pts, "pending_points": -pts},
              "$set": {"updated_at": now_iso()}})
+        await db.impact_ledger.update_one(
+            {"order_number": body.order_number, "status": "pending"},
+            {"$set": {"status": "released", "released_at": now_iso()}},
+        )
     else:
         logging.warning("Approve: no pending purchase ledger entry released for %s", body.order_number)
 
@@ -2324,6 +2566,146 @@ async def sa_ai_test(body: AITestIn, ident=Depends(require_superadmin)):
 # admin business analytics, feature flags, CSV export
 # ============================================================================
 from collections import defaultdict as _dd
+
+EVIDENCE_MATURITY_DAYS = 7
+
+
+async def _care_loop_evidence_payload():
+    """Build public, aggregate-only care evidence from explicitly real records."""
+    calculated_at = datetime.now(timezone.utc)
+    window_start = calculated_at - timedelta(days=EVIDENCE_MATURITY_DAYS)
+    orders = await db.orders.find({"payment_status": "paid"}, {"_id": 0}).to_list(10000)
+    excluded = {"demo": 0, "test": 0, "unverifiable_legacy": 0, "missing_payment_timestamp": 0}
+    mature_orders = []
+    for order in orders:
+        classification = data_classification_for(order)
+        if classification != "real":
+            excluded[classification] += 1
+            continue
+        paid_at = _parse_evidence_timestamp(order.get("payment_confirmed_at"))
+        if not paid_at:
+            excluded["missing_payment_timestamp"] += 1
+            continue
+        if paid_at <= window_start:
+            mature_orders.append((order, paid_at))
+
+    order_by_number = {order.get("order_number"): (order, paid_at) for order, paid_at in mature_orders}
+    mature_customer_ids = {order.get("user_id") for order, _ in mature_orders if order.get("user_id")}
+    qualifying_customers = set()
+    routine_adopters = set()
+    verified_review_orders = set()
+
+    async def qualifies(user_id, timestamp):
+        if not user_id or not timestamp:
+            return False
+        for order, paid_at in mature_orders:
+            if order.get("user_id") == user_id and paid_at <= timestamp <= paid_at + timedelta(days=7):
+                qualifying_customers.add(user_id)
+                return True
+        return False
+
+    # A purchased routine addition is attributable to its paid order.
+    async for event in db.phase4_events.find({"event": "purchased_product_added_to_routine"}, {"_id": 0}):
+        if not is_real_evidence(event):
+            continue
+        linked = order_by_number.get(event.get("order_number"))
+        timestamp = _parse_evidence_timestamp(event.get("created_at"))
+        if linked and timestamp and linked[0].get("user_id") == event.get("identity_id") and linked[1] <= timestamp <= linked[1] + timedelta(days=7):
+            qualifying_customers.add(linked[0]["user_id"])
+            routine_adopters.add(linked[0]["user_id"])
+
+    # These are customer-owned actions, but intentionally aggregate only IDs in memory.
+    async for activity in db.routine_activity.find({}, {"_id": 0}):
+        if is_real_evidence(activity) and int(activity.get("completed", 0) or 0) > 0:
+            if await qualifies(activity.get("user_id"), _parse_evidence_timestamp(activity.get("updated_at"))):
+                routine_adopters.add(activity["user_id"])
+    async for checkin in db.care_checkins.find({}, {"_id": 0}):
+        if is_real_evidence(checkin):
+            await qualifies(checkin.get("user_id"), _parse_evidence_timestamp(checkin.get("created_at")))
+
+    conversations = {}
+    async for conversation in db.ai_conversations.find({}, {"_id": 0, "id": 1, "identity_id": 1, "data_classification": 1}):
+        if is_real_evidence(conversation):
+            conversations[conversation.get("id")] = conversation.get("identity_id")
+    async for message in db.ai_messages.find({"role": "assistant"}, {"_id": 0}):
+        if is_real_evidence(message):
+            await qualifies(conversations.get(message.get("conversation_id")), _parse_evidence_timestamp(message.get("created_at")))
+
+    async for review in db.reviews.find({"status": "published", "verified_purchase": True}, {"_id": 0}):
+        if not is_real_evidence(review):
+            continue
+        linked = order_by_number.get(review.get("order_number"))
+        timestamp = _parse_evidence_timestamp(review.get("created_at"))
+        if linked and timestamp and linked[0].get("user_id") == review.get("user_id"):
+            verified_review_orders.add(review["order_number"])
+            if linked[1] <= timestamp <= linked[1] + timedelta(days=7):
+                qualifying_customers.add(linked[0]["user_id"])
+
+    released_impact_orders = set()
+    async for entry in db.impact_ledger.find({"status": "released"}, {"_id": 0}):
+        if not is_real_evidence(entry) or not entry.get("methodology_version"):
+            continue
+        linked = order_by_number.get(entry.get("order_number"))
+        if linked and linked[0].get("user_id") == entry.get("user_id"):
+            released_impact_orders.add(entry["order_number"])
+
+    denominator = len(mature_customer_ids)
+    status = "AVAILABLE" if denominator else "INSUFFICIENT_DATA"
+    if not denominator and not orders:
+        status = "UNAVAILABLE"
+    elif denominator and sum(excluded.values()):
+        status = "PARTIAL"
+    exclusions = {
+        "data_classification": "Demo, test, and legacy records without an explicit real classification are excluded.",
+        "payment_maturity": f"Only paid orders with payment_confirmed_at at least {EVIDENCE_MATURITY_DAYS} days old are eligible.",
+        "provenance": "Impact requires a released ledger entry tied to the paid order, matching customer, and methodology version.",
+        "counts": excluded,
+    }
+    return {
+        "status": status,
+        "calculated_at": calculated_at.isoformat(),
+        "observation_window": {
+            "maturity_days": EVIDENCE_MATURITY_DAYS,
+            "qualifying_action_window_days": EVIDENCE_MATURITY_DAYS,
+            "eligible_paid_through": window_start.isoformat(),
+        },
+        "metrics": {
+            "care_continuation_rate": {
+                "numerator": len(qualifying_customers), "denominator": denominator,
+                "value": round(len(qualifying_customers) / denominator, 4) if denominator else None,
+                "status": status,
+                "methodology": "Unique customers with a mature paid order and at least one qualifying owned action within seven days of payment.",
+                "exclusions": exclusions,
+            },
+            "paid_customers": {"value": denominator, "status": status, "methodology": "Unique customers with eligible mature paid orders.", "exclusions": exclusions},
+            "paid_orders": {"value": len(mature_orders), "status": status, "methodology": "Eligible real paid orders, counted after payment maturity.", "exclusions": exclusions},
+            "routine_adoption": {
+                "numerator": len(routine_adopters), "denominator": denominator,
+                "value": round(len(routine_adopters) / denominator, 4) if denominator else None,
+                "status": status,
+                "methodology": "Unique eligible customers who added a paid product to a routine or recorded actual completed routine activity in the seven-day window.",
+                "exclusions": exclusions,
+            },
+            "verified_reviews": {
+                "value": len(verified_review_orders),
+                "status": status,
+                "methodology": "Published verified-purchase reviews tied to an eligible paid order; not a rate because review prompting is not universal.",
+                "exclusions": exclusions,
+            },
+            "verified_impact": {
+                "value": len(released_impact_orders),
+                "status": status,
+                "methodology": "Released impact-ledger entries tied to eligible paid orders with matching customer and methodology provenance.",
+                "exclusions": exclusions,
+            },
+        },
+    }
+
+
+@api.get("/care-loop/evidence")
+async def care_loop_evidence():
+    """Public evidence endpoint: deliberately exposes aggregates and methodology only."""
+    return await _care_loop_evidence_payload()
 
 def _round(v, nd=2):
     return round(float(v or 0), nd)
@@ -2380,7 +2762,7 @@ def _daily_series(entries, key, days=30):
 
 @api.get("/impact")
 async def my_impact(ident=Depends(require_customer)):
-    ledger = await db.impact_ledger.find({"user_id": ident["user_id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    ledger = await db.impact_ledger.find({"user_id": ident["user_id"], "status": {"$in": ["released", None]}}, {"_id": 0}).sort("created_at", -1).to_list(500)
     agg = _impact_aggregate(ledger)
     agg["methodology"] = IMPACT_METHODOLOGY
     agg["series"] = {
@@ -2423,22 +2805,65 @@ async def create_review(body: ReviewIn, ident=Depends(require_customer)):
     if existing:
         raise HTTPException(status_code=409, detail="You already reviewed this product.")
     doc = {"id": uuid.uuid4().hex, "user_id": ident["user_id"], "product_id": body.product_id,
-           "order_number": body.order_number, "rating": body.rating, "title": body.title,
-           "body": body.body, "created_at": now_iso()}
-    await db.reviews.insert_one(dict(doc))
+            "order_number": body.order_number, "rating": body.rating, "title": body.title,
+            "body": body.body, "verified_purchase": True, "status": "published",
+            "data_classification": "real", "created_at": now_iso()}
+    try:
+        await db.reviews.insert_one(dict(doc))
+    except DuplicateKeyError:
+        raise HTTPException(status_code=409, detail="You already reviewed this product from this order.")
     await _recompute_product_rating(body.product_id)
+    await db.phase4_events.insert_one({"event": "review_submitted", "identity_id": ident["user_id"],
+                                       "product_id": body.product_id, "order_number": body.order_number, "created_at": now_iso()})
     return doc
 
 
 @api.get("/reviews/product/{product_id}")
 async def product_reviews(product_id: str):
-    items = await db.reviews.find({"product_id": product_id}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(100)
+    items = await db.reviews.find({"product_id": product_id, "status": "published"}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(100)
     return {"items": items, "count": len(items)}
 
 
+@api.get("/superadmin/reviews")
+async def sa_reviews(ident=Depends(require_superadmin)):
+    items = await db.reviews.find({}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(500)
+    return {"items": items}
+
+
+class ReviewModerationIn(BaseModel):
+    status: str
+
+
+@api.patch("/superadmin/reviews/{review_id}")
+async def sa_moderate_review(review_id: str, body: ReviewModerationIn, ident=Depends(require_superadmin)):
+    if body.status not in {"published", "hidden"}:
+        raise HTTPException(status_code=422, detail="Review status must be published or hidden.")
+    review = await db.reviews.find_one({"id": review_id}, {"_id": 0})
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found")
+    await db.reviews.update_one({"id": review_id}, {"$set": {"status": body.status, "moderated_at": now_iso(), "moderated_by": ident["user_id"]}})
+    await _recompute_product_rating(review["product_id"])
+    await db.audit_logs.insert_one({"id": uuid.uuid4().hex, "actor": ident["user_id"], "action": "moderate_review",
+                                    "entity": review_id, "status": body.status, "at": now_iso()})
+    return {"ok": True, "status": body.status}
+
+
+@api.get("/reviews/eligibility/{product_id}")
+async def review_eligibility(product_id: str, ident=Depends(require_customer)):
+    orders = await db.orders.find({"user_id": ident["user_id"], "payment_status": "paid", "items.product_id": product_id}, {"_id": 0, "order_number": 1, "items": 1}).sort("placed_at", -1).to_list(20)
+    eligible = []
+    for order in orders:
+        existing = await db.reviews.find_one({"user_id": ident["user_id"], "order_number": order["order_number"], "product_id": product_id}, {"_id": 1})
+        if not existing:
+            eligible.append(order["order_number"])
+    return {"eligible": bool(eligible), "order_numbers": eligible}
+
+
 async def _recompute_product_rating(product_id):
-    docs = await db.reviews.find({"product_id": product_id}, {"_id": 0}).to_list(1000)
+    docs = await db.reviews.find({"product_id": product_id, "status": "published"}, {"_id": 0}).to_list(1000)
     if not docs:
+        await db.products.update_one({"id": product_id}, {"$unset": {"rating": "", "review_count": ""}})
+        await _refresh_catalog()
         return
     avg = round(sum(d["rating"] for d in docs) / len(docs), 1)
     await db.products.update_one({"id": product_id}, {"$set": {"rating": avg, "review_count": len(docs)}})
@@ -2486,14 +2911,21 @@ PHASE3_EVENTS = {
     "ask_yagi_started_from_product", "care_safety_escalation_triggered",
     "routine_simplification_viewed", "routine_simplification_applied",
 }
+PHASE4_EVENTS = {
+    "post_purchase_routine_prompt_viewed", "purchased_product_added_to_routine",
+    "review_prompt_viewed", "review_started", "review_submitted", "review_published",
+    "reward_viewed", "reward_redeem_started", "reward_redeemed", "reward_applied_checkout",
+    "reorder_prompt_viewed", "reorder_started", "reorder_added_to_cart",
+    "loyalty_points_released", "impact_released",
+}
 
 
 @api.post("/events")
 async def phase2_event(body: Phase2EventIn, ident=Depends(require_identity)):
-    if body.event not in PHASE2_EVENTS and body.event not in PHASE3_EVENTS:
+    if body.event not in PHASE2_EVENTS and body.event not in PHASE3_EVENTS and body.event not in PHASE4_EVENTS:
         raise HTTPException(status_code=400, detail="Unsupported event")
     safe = {k: v for k, v in body.properties.items() if k in {"onboarding_version", "concern_count", "routine_preference", "product_id", "source_screen", "source", "level"}}
-    collection = db.phase2_events if body.event in PHASE2_EVENTS else db.phase3_events
+    collection = db.phase2_events if body.event in PHASE2_EVENTS else db.phase3_events if body.event in PHASE3_EVENTS else db.phase4_events
     await collection.insert_one({"event": body.event, "identity_id": ident["user_id"], "identity_type": ident["typ"], **safe, "created_at": now_iso()})
     return {"ok": True}
 
@@ -2785,6 +3217,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; "
+        "font-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none'; "
+        "base-uri 'self'; form-action 'self'",
+    )
+    return response
+
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 logger.info("CORS allowlist: %s", CORS_ORIGINS)

@@ -62,10 +62,12 @@ export const api = {
     getRoutine: () => request("/routine"),
     putRoutine: (steps) => request("/routine", { method: "PUT", body: { steps } }),
     // checkout / orders
-    quote: (shipping_method) => request("/checkout/quote", { method: "POST", body: { shipping_method } }),
+    quote: (shipping_method, reward_id) => request("/checkout/quote", { method: "POST", body: { shipping_method, reward_id } }),
     placeOrder: (body) => request("/orders", { method: "POST", body }),
     getOrders: () => request("/orders"),
     getOrder: (n) => request(`/orders/${n}`),
+    addPurchasedToRoutine: (n, product_id, period) => request(`/orders/${n}/routine`, { method: "POST", body: { product_id, period } }),
+    reorderable: () => request("/orders/reorderable"),
     // loyalty / profile
     loyalty: () => request("/loyalty"),
     getProfile: () => request("/profile"),
@@ -78,12 +80,14 @@ export const api = {
     listAddresses: () => request("/addresses"),
     addAddress: (body) => request("/addresses", { method: "POST", body }),
     rewards: () => request("/rewards"),
-    redeem: (reward_id) => request("/rewards/redeem", { method: "POST", body: { reward_id } }),
+    redeem: (reward_id, idempotency_key) => request("/rewards/redeem", { method: "POST", body: { reward_id, idempotency_key } }),
     // superadmin
     saKnowledge: () => request("/superadmin/knowledge"),
     saAddKnowledge: (body) => request("/superadmin/knowledge", { method: "POST", body }),
     saToggleKnowledge: (source_id, status) => request("/superadmin/knowledge", { method: "PATCH", body: { source_id, status } }),
     saOrders: () => request("/superadmin/orders"),
+    saReviews: () => request("/superadmin/reviews"),
+    saModerateReview: (id, status) => request(`/superadmin/reviews/${id}`, { method: "PATCH", body: { status } }),
     saApprove: (order_number) => request("/superadmin/orders/approve", { method: "POST", body: { order_number } }),
     saReject: (order_number, reason) => request("/superadmin/orders/reject", { method: "POST", body: { order_number, reason } }),
     saAiTest: (message) => request("/superadmin/ai-test", { method: "POST", body: { message } }),
@@ -96,6 +100,7 @@ export const api = {
     // impact
     impact: () => request("/impact"),
     impactMethodology: () => request("/impact/methodology", { auth: false }),
+    careLoopEvidence: () => request("/care-loop/evidence", { auth: false }),
     // wellness
     wellness: () => request("/wellness"),
     // reviews
