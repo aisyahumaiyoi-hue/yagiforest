@@ -46,13 +46,11 @@ const EMPTY_PRODUCT = {
     unit_price: "",
     image: "",
     images: [],
-    rating: 5.0,
-    review_count: 0,
     badges: [],
-    match_score: 0,
     routine_stage: "",
     usage: "",
     certifications: [],
+    designed_for: [],
     lower_waste: false,
     variants: [],
     impact: null,
@@ -101,6 +99,8 @@ export default function Superadmin() {
     const [analytics, setAnalytics] = useState(null);
     const [impact, setImpact] = useState(null);
     const [flags, setFlags] = useState(null);
+    const [flagRegistry, setFlagRegistry] = useState(null);
+    const [unavailableFlags, setUnavailableFlags] = useState([]);
 
     // product editor
     const [editing, setEditing] = useState(null); // null | "new" | product object
@@ -121,7 +121,14 @@ export default function Superadmin() {
 
     const loadAnalytics = () => api.saAnalytics().then(setAnalytics).catch(() => {});
     const loadImpact = () => api.saImpact().then(setImpact).catch(() => {});
-    const loadFlags = () => api.saFlags().then((r) => setFlags(r.flags)).catch(() => {});
+    const loadFlags = () =>
+        api.saFlags()
+            .then((r) => {
+                setFlags(r.flags);
+                setFlagRegistry(r.registry || null);
+                setUnavailableFlags(r.unavailable || []);
+            })
+            .catch(() => {});
 
     useEffect(() => {
         if (isAdmin) load();
@@ -149,12 +156,9 @@ export default function Superadmin() {
     const startEdit = (p) => setEditing({ isNew: false, data: { ...p } });
 
     const saveProduct = async () => {
-        const d = editing.data;
+        const d = { ...editing.data };
         if (!d.name || !d.slug) return toast.error("Name and slug are required.");
         d.price = Number(d.price) || 0;
-        d.rating = Number(d.rating) || 0;
-        d.review_count = Number(d.review_count) || 0;
-        d.match_score = Number(d.match_score) || 0;
         try {
             if (editing.isNew) {
                 await api.saCreateProduct(d);
@@ -295,7 +299,7 @@ export default function Superadmin() {
                 ) : tab === "impact" ? (
                     <ImpactPanel impact={impact} onLoad={loadImpact} />
                 ) : tab === "flags" ? (
-                    <FlagsPanel flags={flags} onLoad={loadFlags} onToggle={setFlag} />
+                    <FlagsPanel flags={flags} registry={flagRegistry} unavailable={unavailableFlags} onLoad={loadFlags} onToggle={setFlag} />
                 ) : tab === "products" ? (
                     editing ? (
                         <ProductEditor editing={editing} setEditing={setEditing} save={saveProduct} />
@@ -312,7 +316,7 @@ export default function Superadmin() {
                                             <th className="px-4 py-3 font-semibold">Product</th>
                                             <th className="px-4 py-3 font-semibold">Category</th>
                                             <th className="px-4 py-3 font-semibold">Price</th>
-                                            <th className="px-4 py-3 font-semibold">Rating</th>
+                                            <th className="px-4 py-3 font-semibold">Reviews</th>
                                             <th className="px-4 py-3 font-semibold">Status</th>
                                             <th className="px-4 py-3 text-right font-semibold">Actions</th>
                                         </tr>
@@ -333,7 +337,11 @@ export default function Superadmin() {
                                                 </td>
                                                 <td className="px-4 py-3 text-slate-600">{p.category}</td>
                                                 <td className="px-4 py-3 font-medium">{formatIDR(p.price)}</td>
-                                                <td className="px-4 py-3 text-slate-600">{p.rating} ★</td>
+                                                <td className="px-4 py-3 text-slate-600">
+                                                    {p.review_stats?.has_reviews
+                                                        ? `${p.review_stats.rating} ★ · ${p.review_stats.review_count}`
+                                                        : <span className="text-slate-400">No reviews yet</span>}
+                                                </td>
                                                 <td className="px-4 py-3">
                                                     <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${p.active === false ? "bg-slate-100 text-slate-500" : "bg-emerald-50 text-emerald-700"}`}>
                                                         {p.active === false ? "Hidden" : "Active"}
@@ -450,9 +458,6 @@ function ProductEditor({ editing, setEditing, save }) {
                     <Field label="Price (IDR)"><input type="number" className={inputCls} value={d.price} onChange={(e) => set("price", e.target.value)} /></Field>
                     <Field label="Unit"><input className={inputCls} value={d.unit} onChange={(e) => set("unit", e.target.value)} placeholder="60 g" /></Field>
                     <Field label="Unit price"><input className={inputCls} value={d.unit_price || ""} onChange={(e) => set("unit_price", e.target.value)} placeholder="Rp3.150/g" /></Field>
-                    <Field label="Rating"><input type="number" step="0.1" className={inputCls} value={d.rating} onChange={(e) => set("rating", e.target.value)} /></Field>
-                    <Field label="Review count"><input type="number" className={inputCls} value={d.review_count} onChange={(e) => set("review_count", e.target.value)} /></Field>
-                    <Field label="Match score"><input type="number" className={inputCls} value={d.match_score} onChange={(e) => set("match_score", e.target.value)} /></Field>
                     <Field label="Routine stage">
                         <select className={inputCls} value={d.routine_stage || ""} onChange={(e) => set("routine_stage", e.target.value)}>
                             {ROUTINE_OPTIONS.map((r) => <option key={r} value={r}>{r || "—"}</option>)}
@@ -464,6 +469,14 @@ function ProductEditor({ editing, setEditing, save }) {
                     <Field label="Description"><textarea rows={3} className={inputCls} value={d.description} onChange={(e) => set("description", e.target.value)} /></Field>
                     <Field label="Usage"><input className={inputCls} value={d.usage} onChange={(e) => set("usage", e.target.value)} /></Field>
                     <Field label="Image URL"><input className={inputCls} value={d.image || ""} onChange={(e) => set("image", e.target.value)} placeholder="https://…" /></Field>
+                    <Field label="What it is for (comma separated)">
+                        <input
+                            className={inputCls}
+                            value={(d.designed_for || []).join(", ")}
+                            onChange={(e) => set("designed_for", e.target.value.split(",").map((x) => x.trim()).filter(Boolean))}
+                            placeholder="Dry skin, Barrier support"
+                        />
+                    </Field>
                 </div>
             </div>
 
@@ -519,41 +532,74 @@ function ProductEditor({ editing, setEditing, save }) {
 }
 
 function KnowledgePanel({ knowledge, onChanged }) {
-    const [form, setForm] = useState({ title: "", content: "", publisher: "YAGI Care", trusted_for_health: true });
+    const [form, setForm] = useState({ title: "", content: "", publisher: "YAGI Care", trusted_for_health: false, source_url: "" });
 
     const add = async () => {
         if (!form.title || !form.content) return toast.error("Title and content required.");
-        await api.saAddKnowledge(form);
-        toast.success("Source added");
-        setForm({ title: "", content: "", publisher: "YAGI Care", trusted_for_health: true });
-        onChanged();
+        if (form.trusted_for_health && !form.source_url.trim()) {
+            return toast.error("Add a source URL before marking this as trusted for health.");
+        }
+        try {
+            await api.saAddKnowledge(form);
+            toast.success("Source added");
+            setForm({ title: "", content: "", publisher: "YAGI Care", trusted_for_health: false, source_url: "" });
+            onChanged();
+        } catch (e) {
+            toast.error(e.message);
+        }
+    };
+
+    const toggleStatus = async (s) => {
+        try {
+            await api.saToggleKnowledge(s.id, s.status === "active" ? "inactive" : "active");
+            onChanged();
+        } catch (e) {
+            toast.error(e.message);
+        }
     };
 
     return (
         <div className="max-w-3xl space-y-4">
             <div className="rounded-2xl bg-white p-6 shadow-sm">
-                <h3 className="mb-3 text-[13px] font-bold">Add trusted source</h3>
+                <h3 className="mb-1 text-[13px] font-bold">Add source</h3>
+                <p className="mb-3 text-[12px] text-slate-400">
+                    Ask YAGI cites these entries. Only mark a source “trusted for health” when it points to a real,
+                    citable reference — otherwise it is treated as YAGI-authored care education.
+                </p>
                 <div className="space-y-3">
                     <input className={inputCls} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Title" />
                     <textarea className={inputCls} rows={3} value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} placeholder="Content" />
                     <input className={inputCls} value={form.publisher} onChange={(e) => setForm({ ...form, publisher: e.target.value })} placeholder="Publisher" />
+                    <input className={inputCls} value={form.source_url} onChange={(e) => setForm({ ...form, source_url: e.target.value })} placeholder="Source URL (required for health-trusted sources)" />
                     <label className="flex items-center gap-2 text-[13px]">
                         <input type="checkbox" checked={form.trusted_for_health} onChange={(e) => setForm({ ...form, trusted_for_health: e.target.checked })} />
-                        Trusted for health
+                        Trusted for health (requires a source URL)
                     </label>
                     <button onClick={add} className="rounded-lg bg-emerald-600 px-4 py-2 text-[13px] font-semibold text-white">Save source</button>
                 </div>
             </div>
             <div className="space-y-2">
+                {knowledge.sources.length === 0 && (
+                    <p className="rounded-xl bg-white p-4 text-[12px] text-slate-400 shadow-sm">No sources yet.</p>
+                )}
                 {knowledge.sources.map((s) => (
                     <div key={s.id} className="flex items-center justify-between rounded-xl bg-white p-4 shadow-sm">
-                        <div>
-                            <p className="text-[13px] font-medium">{s.title}</p>
-                            <p className="text-[11px] text-slate-400">{s.publisher} · {s.trusted_for_health ? "health" : "info"}</p>
+                        <div className="min-w-0">
+                            <p className="truncate text-[13px] font-medium">{s.title}</p>
+                            <p className="text-[11px] text-slate-400">
+                                {s.publisher} · {s.trusted_for_health ? "health-trusted" : "general education"}
+                            </p>
+                            {s.url ? (
+                                <a href={s.url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-emerald-600 underline">
+                                    {s.url}
+                                </a>
+                            ) : (
+                                <p className="text-[11px] text-slate-400">No citable URL</p>
+                            )}
                         </div>
                         <button
-                            onClick={() => api.saToggleKnowledge(s.id, s.status === "active" ? "inactive" : "active").then(onChanged)}
-                            className={`rounded-full px-3 py-1 text-[11px] font-semibold ${s.status === "active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+                            onClick={() => toggleStatus(s)}
+                            className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold ${s.status === "active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
                             {s.status}
                         </button>
                     </div>
@@ -739,41 +785,79 @@ function ImpactPanel({ impact, onLoad }) {
     );
 }
 
-function FlagsPanel({ flags, onLoad, onToggle }) {
+function FlagsPanel({ flags, registry, unavailable, onLoad, onToggle }) {
     useEffect(() => { onLoad(); }, [onLoad]);
 
     if (!flags) return <p className="text-[13px] text-slate-400">Memuat feature flags…</p>;
-    const entries = Object.entries(flags);
+    const unavailableSet = new Set(unavailable || []);
+    const operational = Object.entries(flags).filter(([k]) => !unavailableSet.has(k));
+    const disabled = Object.entries(flags).filter(([k]) => unavailableSet.has(k));
+
+    const Row = ({ flagKey, value, isUnavailable }) => (
+        <tr className="hover:bg-slate-50/60">
+            <td className="px-4 py-3">
+                <p className="font-medium text-slate-700">{registry?.[flagKey]?.label || flagKey}</p>
+                <p className="text-[11px] text-slate-400">{flagKey}</p>
+                {registry?.[flagKey]?.controls && (
+                    <p className="text-[11px] text-slate-400">Controls: {registry[flagKey].controls}</p>
+                )}
+            </td>
+            <td className="px-4 py-3">
+                <div className="flex justify-end">
+                    {isUnavailable ? (
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-500">
+                            Not implemented
+                        </span>
+                    ) : (
+                        <button
+                            onClick={() => onToggle(flagKey, !value)}
+                            className={`relative h-6 w-11 rounded-full transition-colors ${value ? "bg-emerald-500" : "bg-slate-300"}`}
+                            aria-label={`Toggle ${flagKey}`}
+                            aria-pressed={value}
+                        >
+                            <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${value ? "translate-x-5" : "translate-x-0.5"}`} />
+                        </button>
+                    )}
+                </div>
+            </td>
+        </tr>
+    );
 
     return (
-        <div className="space-y-4">
-            <h2 className="text-[15px] font-bold text-slate-800">Feature flags</h2>
-            <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
-                <table className="w-full text-left text-[13px]">
-                    <thead className="border-b border-slate-100 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400">
-                        <tr><th className="px-4 py-3 font-semibold">Fitur</th><th className="px-4 py-3 text-right font-semibold">Status</th></tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                        {entries.map(([key, value]) => (
-                            <tr key={key} className="hover:bg-slate-50/60">
-                                <td className="px-4 py-3 font-medium text-slate-700">{key}</td>
-                                <td className="px-4 py-3">
-                                    <div className="flex justify-end">
-                                        <button
-                                            onClick={() => onToggle(key, !value)}
-                                            className={`relative h-6 w-11 rounded-full transition-colors ${value ? "bg-emerald-500" : "bg-slate-300"}`}
-                                            aria-label={`Toggle ${key}`}
-                                        >
-                                            <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${value ? "translate-x-5" : "translate-x-0.5"}`} />
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+        <div className="space-y-5">
+            <div>
+                <h2 className="text-[15px] font-bold text-slate-800">Operational flags</h2>
+                <p className="mt-0.5 text-[12px] text-slate-400">
+                    These flags are read by the backend and the app. Toggling one changes real behaviour immediately.
+                </p>
+                <div className="mt-2 overflow-hidden rounded-2xl bg-white shadow-sm">
+                    <table className="w-full text-left text-[13px]">
+                        <thead className="border-b border-slate-100 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400">
+                            <tr><th className="px-4 py-3 font-semibold">Feature</th><th className="px-4 py-3 text-right font-semibold">Status</th></tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {operational.map(([k, v]) => <Row key={k} flagKey={k} value={v} />)}
+                        </tbody>
+                    </table>
+                </div>
             </div>
-            <p className="text-[12px] text-slate-400">Perubahan tersimpan permanen dan langsung berlaku di aplikasi.</p>
+
+            {disabled.length > 0 && (
+                <div>
+                    <h3 className="text-[13px] font-bold text-slate-600">Not available</h3>
+                    <p className="mt-0.5 text-[12px] text-slate-400">
+                        Listed for transparency only. The capability behind these flags does not exist, so they cannot be
+                        switched on.
+                    </p>
+                    <div className="mt-2 overflow-hidden rounded-2xl bg-white shadow-sm">
+                        <table className="w-full text-left text-[13px]">
+                            <tbody className="divide-y divide-slate-100">
+                                {disabled.map(([k, v]) => <Row key={k} flagKey={k} value={v} isUnavailable />)}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Sparkles, ArrowUp, Plus, ExternalLink, ShieldAlert, ChevronRight } from "lucide-react";
+import { toast } from "sonner";
 import { MobileShell } from "@/components/yagi/MobileShell";
 import { TopBar } from "@/components/yagi/TopBar";
 import { useYagi } from "@/store/YagiContext";
@@ -12,8 +13,13 @@ const SUGGESTIONS = [
     "Where should Body Butter go in my routine?",
     "Apa itu skin barrier?",
     "How should I moisturize eczema-prone skin?",
-    "What makes this product impactful?",
 ];
+
+const SOURCE_LABEL = {
+    yagi_product: "YAGI catalogue",
+    brand_education: "YAGI care education",
+    medical_guideline: "Clinical guidance",
+};
 
 const SourceList = ({ citations }) => {
     const [open, setOpen] = useState(false);
@@ -26,12 +32,34 @@ const SourceList = ({ citations }) => {
             </button>
             {open && (
                 <div className="mt-1.5 flex flex-col gap-1.5">
-                    {citations.map((c, i) => (
-                        <div key={i} className="flex items-center gap-2 rounded-[10px] bg-pale/60 px-2.5 py-1.5 text-[11px]">
-                            <span className="flex-1 truncate text-foreground">{c.title}<span className="text-muted-foreground"> · {c.publisher}</span></span>
-                            {c.url && <ExternalLink className="h-3 w-3 text-secondary" strokeWidth={2} />}
-                        </div>
-                    ))}
+                    {citations.map((c, i) => {
+                        const label = SOURCE_LABEL[c.type] || c.type;
+                        const row = (
+                            <>
+                                <span className="flex-1 truncate text-foreground">
+                                    {c.title}<span className="text-muted-foreground"> · {c.publisher}</span>
+                                </span>
+                                <span className="shrink-0 text-[9.5px] uppercase tracking-wide text-muted-foreground">{label}</span>
+                            </>
+                        );
+                        // Only render a link affordance when a real URL exists.
+                        return c.url ? (
+                            <a
+                                key={i}
+                                href={c.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-2 rounded-[10px] bg-pale/60 px-2.5 py-1.5 text-[11px]"
+                            >
+                                {row}
+                                <ExternalLink className="h-3 w-3 shrink-0 text-secondary" strokeWidth={2} />
+                            </a>
+                        ) : (
+                            <div key={i} className="flex items-center gap-2 rounded-[10px] bg-pale/60 px-2.5 py-1.5 text-[11px]">
+                                {row}
+                            </div>
+                        );
+                    })}
                 </div>
             )}
         </div>
@@ -40,16 +68,19 @@ const SourceList = ({ citations }) => {
 
 export default function AskYagi() {
     const navigate = useNavigate();
-    const { addToCart } = useYagi();
+    const { addToCart, isEnabled } = useYagi();
     const [params] = useSearchParams();
     const productId = params.get("product_id") || null;
     const productName = params.get("product_name") || null;
+    const contextType = params.get("context") || (productId ? "product" : "general");
 
     const [messages, setMessages] = useState([]); // {role, content, citations, products, safety}
     const [input, setInput] = useState("");
     const [busy, setBusy] = useState(false);
     const [convId, setConvId] = useState(null);
     const endRef = useRef(null);
+
+    const askEnabled = isEnabled("skin_agent_enabled");
 
     useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, busy]);
 
@@ -60,15 +91,45 @@ export default function AskYagi() {
         setMessages((m) => [...m, { role: "user", content: q }]);
         setBusy(true);
         try {
-            const res = await api.aiChat({ message: q, conversation_id: convId, product_id: productId, context_type: productId ? "product" : "general" });
+            const res = await api.aiChat({ message: q, conversation_id: convId, product_id: productId, context_type: contextType });
+            if (!convId) api.event(contextType === "checkin" ? "ask_yagi_started_from_checkin" : contextType === "product" ? "ask_yagi_started_from_product" : contextType === "routine" ? "ask_yagi_started_from_routine" : "ask_yagi_started_from_routine", { source: contextType }).catch(() => {});
             setConvId(res.conversation_id);
             setMessages((m) => [...m, { role: "assistant", content: res.answer, citations: res.citations, products: res.products, safety: res.safety }]);
         } catch (e) {
-            setMessages((m) => [...m, { role: "assistant", content: e.message || "Ask YAGI couldn’t answer just now. Please try again.", error: true }]);
+            setMessages((m) => [...m, { role: "assistant", content: e.message || "Ask YAGI couldn\u2019t answer just now. Please try again.", error: true }]);
         } finally {
             setBusy(false);
         }
     };
+
+    const addProduct = async (p) => {
+        try {
+            await addToCart(p.id, undefined, 1);
+            toast("Added to bag", { description: p.name });
+        } catch (e) {
+            toast("Couldn\u2019t add to bag", { description: e.message });
+        }
+    };
+
+    if (!askEnabled) {
+        return (
+            <MobileShell nav={false}>
+                <TopBar title="Ask YAGI" subtitle="Care assistant" />
+                <div className="flex flex-col items-center px-6 pt-24 text-center">
+                    <span className="grid h-16 w-16 place-items-center rounded-full bg-pale">
+                        <Sparkles className="h-8 w-8 text-secondary" strokeWidth={1.6} />
+                    </span>
+                    <h2 className="font-serif-display mt-5 text-[22px] text-foreground">Ask YAGI is unavailable.</h2>
+                    <p className="mt-1.5 text-[13px] text-muted-foreground">
+                        The care assistant has been turned off temporarily. Please try again later.
+                    </p>
+                    <button onClick={() => navigate("/")} className="btn-green focus-ring mt-5 rounded-[15px] px-6 py-3 text-[14px] font-semibold">
+                        Back home
+                    </button>
+                </div>
+            </MobileShell>
+        );
+    }
 
     return (
         <MobileShell nav={false}>
@@ -112,9 +173,9 @@ export default function AskYagi() {
                             <div className="glass-shell rounded-[18px]">
                                 <div className="inner-card rounded-[14px] p-3.5">
                                     {m.safety?.escalation && (
-                                        <div className="mb-2 flex items-start gap-2 rounded-[10px] bg-[hsl(38_70%_94%)] p-2.5">
+                                        <div className={`mb-2 flex items-start gap-2 rounded-[10px] p-2.5 ${m.safety.level === "URGENT" ? "bg-[hsl(0_70%_95%)]" : "bg-[hsl(38_70%_94%)]"}`}>
                                             <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[hsl(30_70%_42%)]" strokeWidth={2} />
-                                            <p className="text-[11.5px] leading-snug text-[hsl(28_45%_32%)]">This may need professional medical attention. Please consider contacting a qualified healthcare professional.</p>
+                                            <p className="text-[11.5px] leading-snug text-[hsl(28_45%_32%)]">{m.safety.level === "URGENT" ? "Please seek urgent medical help appropriate to your location." : "This may need professional medical attention. Please consider contacting a qualified healthcare professional."}</p>
                                         </div>
                                     )}
                                     <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground">{m.content}</p>
@@ -130,7 +191,7 @@ export default function AskYagi() {
                                                         <p className="text-[11px] font-medium text-primary">{formatIDR(p.price)}</p>
                                                     </div>
                                                     <button onClick={() => navigate(`/product/${p.slug}`)} className="rounded-[9px] bg-white px-2 py-1.5 text-[10.5px] font-semibold text-secondary shadow-glass-sm">View</button>
-                                                    <button onClick={() => addToCart(p.id, undefined, 1)} aria-label="Add to bag" className="product-add grid h-8 w-8 place-items-center rounded-[10px]">
+                                                    <button onClick={() => addProduct(p)} aria-label="Add to bag" className="product-add grid h-8 w-8 place-items-center rounded-[10px]">
                                                         <Plus className="h-4 w-4" strokeWidth={2.2} />
                                                     </button>
                                                 </div>

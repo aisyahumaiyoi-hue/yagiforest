@@ -1,7 +1,19 @@
 import { Sparkles, ArrowRight } from "lucide-react";
 import { SCAN_HERO_IMAGE } from "./data";
 
-export const SkinScanHero = ({ onScan }) => {
+/**
+ * CareAssistantHero — the primary Home capability card.
+ *
+ * This replaces the previous "AI skin scan" hero, which presented a scanning
+ * experience ("Analyzing" badge, scan overlay) for a pipeline that does not
+ * exist. The card now promotes Ask YAGI, which is genuinely implemented and
+ * grounded in YAGI product data and care education.
+ *
+ * Skin Analyzer is unfinished and is intentionally NOT promoted here. It is
+ * surfaced only as an explicitly labelled "In development" note in the Routine
+ * screen, behind the server-side `skin_analyzer_enabled` flag.
+ */
+export const CareAssistantHero = ({ onAsk, available = true, onUnavailable }) => {
     return (
         <div className="glass-shell rounded-[30px]">
             <div className="inner-card overflow-hidden rounded-[26px]">
@@ -13,66 +25,47 @@ export const SkinScanHero = ({ onScan }) => {
                                 <Sparkles className="h-3.5 w-3.5 text-secondary" strokeWidth={2} />
                             </span>
                             <span className="text-[11.5px] font-medium tracking-wide text-secondary">
-                                AI skin scan
+                                Ask YAGI
                             </span>
                         </div>
 
                         <h2 className="font-serif-display mt-3 text-[30px] leading-[1.08] text-primary text-balance">
-                            Understand your skin better
+                            Ask about your skin
                         </h2>
 
                         <p className="mt-2.5 text-[12px] leading-snug text-muted-foreground">
-                            Personalized insights for eczema-prone, sensitive skin
+                            Grounded answers on YAGI products, routines and sensitive-skin care.
                         </p>
 
                         <div className="mt-auto pt-4">
                             <button
-                                onClick={onScan}
+                                onClick={available ? onAsk : onUnavailable}
                                 className="btn-green focus-ring flex h-[50px] w-full items-center justify-between rounded-[17px] pl-4 pr-2"
                             >
-                                <span className="text-[14px] font-semibold">Start scan</span>
+                                <span className="text-[14px] font-semibold">
+                                    {available ? "Ask YAGI" : "Temporarily unavailable"}
+                                </span>
                                 <span className="btn-bubble grid h-9 w-9 place-items-center rounded-full">
                                     <ArrowRight className="h-[18px] w-[18px]" strokeWidth={2.2} />
                                 </span>
                             </button>
                             <p className="mt-2 text-center text-[10.5px] text-muted-foreground">
-                                Takes less than 2 minutes
+                                General care information, not medical diagnosis
                             </p>
                         </div>
                     </div>
 
-                    {/* Right image with analysis overlay */}
+                    {/* Right image */}
                     <div className="relative w-[46%] overflow-hidden">
                         <img
                             src={SCAN_HERO_IMAGE}
-                            alt="Close-up of calm, healthy skin with AI dermatology analysis overlay"
+                            alt="Close-up of calm, healthy skin"
                             className="absolute inset-0 h-full w-full origin-center animate-herozoom object-cover"
                         />
-                        {/* left fade to blend into card */}
                         <div className="absolute inset-0 bg-gradient-to-r from-white via-white/10 to-transparent" />
-                        {/* scan overlay marks */}
-                        <svg
-                            className="absolute inset-0 h-full w-full text-white/70"
-                            viewBox="0 0 100 200"
-                            preserveAspectRatio="none"
-                            aria-hidden="true"
-                        >
-                            <g stroke="hsl(112 60% 78%)" strokeWidth="0.4" fill="none" opacity="0.55">
-                                <path d="M40 70 Q60 60 78 74" />
-                                <path d="M42 100 Q62 96 80 108" />
-                                <path d="M44 130 Q62 132 78 140" />
-                                <path d="M62 60 L62 150" opacity="0.4" />
-                            </g>
-                            <g fill="hsl(112 65% 72%)">
-                                <circle cx="58" cy="84" r="1.1" />
-                                <circle cx="70" cy="104" r="1.1" />
-                                <circle cx="54" cy="120" r="1.1" />
-                                <circle cx="74" cy="132" r="1.1" />
-                            </g>
-                        </svg>
                         <div className="absolute right-3 top-3 flex items-center gap-1 rounded-full bg-white/75 px-2 py-[3px] backdrop-blur-md">
-                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[hsl(112_50%_46%)]" />
-                            <span className="text-[9px] font-medium text-secondary">Analyzing</span>
+                            <Sparkles className="h-2.5 w-2.5 text-secondary" strokeWidth={2.2} />
+                            <span className="text-[9px] font-medium text-secondary">Grounded in YAGI data</span>
                         </div>
                     </div>
                 </div>

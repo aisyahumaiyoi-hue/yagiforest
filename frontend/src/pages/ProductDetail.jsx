@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { MobileShell } from "@/components/yagi/MobileShell";
 import { Wordmark } from "@/components/yagi/Wordmark";
-import { Stars } from "@/components/yagi/Stars";
+import { Stars, RatingSummary } from "@/components/yagi/Stars";
 import { ImpactCard, AwardProof } from "@/components/yagi/Impact";
 import { BottomSheet } from "@/components/yagi/BottomSheet";
 import { ShopProductCard } from "@/components/yagi/ShopProductCard";
@@ -36,7 +36,6 @@ const HELPS = [
     { Icon: Leaf, text: "Calms the feel of dry skin" },
     { Icon: Heart, text: "Designed for sensitive routines" },
 ];
-const REVIEW_FILTERS = ["All", "Eczema-prone", "Dry skin", "Sensitive", "Texture", "Repurchase"];
 
 const Accordion = ({ title, children, defaultOpen = false }) => {
     const [open, setOpen] = useState(defaultOpen);
@@ -76,40 +75,112 @@ const Accordion = ({ title, children, defaultOpen = false }) => {
 export default function ProductDetail() {
     const { slug } = useParams();
     const navigate = useNavigate();
-    const { addToCart, toggleSaved, isSaved, addToRoutine, cartCount, getProductBySlug, products, shipping } = useYagi();
-    const product = useMemo(() => getProductBySlug(slug) || products[0], [slug, getProductBySlug, products]);
+    const {
+        addToCart, toggleSaved, isSaved, addToRoutine, cartCount, getProductBySlug, products,
+        shipping, catalogLoaded, getReviewStats, careProfile,
+    } = useYagi();
+    const product = useMemo(() => getProductBySlug(slug), [slug, getProductBySlug]);
+    const profileReasons = useMemo(() => {
+        if (!careProfile || !product) return [];
+        const labels = { dryness: "dryness", sensitive_skin: "sensitive skin", skin_barrier: "skin barrier", redness: "redness", itching: "itching", eczema_care: "eczema care" };
+        const matches = (careProfile.concerns || []).map((key) => labels[key]).filter((label) => product.skinConcerns?.includes(label === "skin barrier" ? "Skin barrier" : label.replace(/(^| )\S/g, (m) => m.toUpperCase())));
+        return matches;
+    }, [careProfile, product]);
 
     const [activeImg, setActiveImg] = useState(0);
-    const [variant, setVariant] = useState(product.variants?.[product.variants.length > 1 ? 1 : 0]?.id);
+    const [variant, setVariant] = useState(null);
     const [qty, setQty] = useState(1);
     const [added, setAdded] = useState(false);
+    const [busy, setBusy] = useState(false);
     const [viewer, setViewer] = useState(false);
-    const [matchOpen, setMatchOpen] = useState(false);
-    const [reviewFilter, setReviewFilter] = useState("All");
     const [reviews, setReviews] = useState([]);
+    const [reviewsLoaded, setReviewsLoaded] = useState(false);
+    const productId = product?.id;
+    const variantIds = (product?.variants || []).map((v) => v.id).join(",");
 
     useEffect(() => {
-        if (product?.id) {
-            api.productReviews(product.id).then((r) => setReviews(r.items || [])).catch(() => setReviews([]));
+        if (productId) {
+            setReviewsLoaded(false);
+            api.productReviews(productId)
+                .then((r) => setReviews(r.items || []))
+                .catch(() => setReviews([]))
+                .finally(() => setReviewsLoaded(true));
         }
-    }, [product?.id]);
+    }, [productId]);
+
+    // Default to the middle variant (or the only one) when the product changes.
+    useEffect(() => {
+        const list = product?.variants || [];
+        if (list.length) {
+            setVariant(list[list.length > 1 ? 1 : 0]?.id);
+        }
+        setActiveImg(0);
+        setQty(1);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [productId, variantIds]);
+
+    const shippingEta = useMemo(() => {
+        const eta = (shipping || []).find((s) => s.id === "regular")?.eta;
+        return eta ? `arrives ${eta.replace(/^Arrives\s+/i, "")}` : "arrives in 2–4 business days";
+    }, [shipping]);
+
+    if (!product) {
+        return (
+            <MobileShell nav={false}>
+                <div className="flex flex-col items-center px-6 pt-24 text-center">
+                    <h2 className="font-serif-display text-[22px] text-foreground">
+                        {catalogLoaded ? "We couldn\u2019t find that product." : "Loading product\u2026"}
+                    </h2>
+                    {catalogLoaded && (
+                        <>
+                            <p className="mt-1.5 text-[13px] text-muted-foreground">
+                                It may have been renamed or removed from the YAGI catalogue.
+                            </p>
+                            <button
+                                onClick={() => navigate("/shop")}
+                                className="btn-green focus-ring mt-5 rounded-[15px] px-6 py-3 text-[14px] font-semibold"
+                            >
+                                Back to shop
+                            </button>
+                        </>
+                    )}
+                </div>
+            </MobileShell>
+        );
+    }
 
     const saved = isSaved(product.id);
     const activeVariant = product.variants?.find((v) => v.id === variant) || product.variants?.[0];
     const price = activeVariant?.price || product.price;
+    const stats = getReviewStats(product);
 
-    const shippingEta = useMemo(() => {
-        const eta = (shipping || []).find((s) => s.id === "regular")?.eta;
-        return eta ? `arrives ${eta.replace(/^Arrives\s+/i, "")}` : "arrives in 2–4 days";
-    }, [shipping]);
+    const handleAdd = async () => {
+        if (busy) return;
+        setBusy(true);
+        try {
+            await addToCart(product.id, activeVariant?.id, qty);
+            setAdded(true);
+            toast("Added to bag", { description: `${product.name} · ${activeVariant?.label || product.unit}` });
+            setTimeout(() => setAdded(false), 1600);
+        } catch (e) {
+            toast("Couldn\u2019t add to bag", { description: e.message });
+        } finally {
+            setBusy(false);
+        }
+    };
 
-    const shownReviews = reviews.filter((r) => reviewFilter === "All" || r.tag === reviewFilter);
-
-    const handleAdd = () => {
-        addToCart(product.id, variant, qty);
-        setAdded(true);
-        toast("Added to bag", { description: `${product.name} · ${activeVariant?.label}` });
-        setTimeout(() => setAdded(false), 1600);
+    const share = async () => {
+        const url = window.location.href;
+        try {
+            if (navigator.share) {
+                await navigator.share({ title: product.name, url });
+                return;
+            }
+            await navigator.clipboard.writeText(url);
+            toast("Link copied");
+        } catch {
+            /* user cancelled or clipboard unavailable - no misleading success */
+        }
     };
 
     return (
@@ -144,7 +215,8 @@ export default function ProductDetail() {
                         </div>
                         <button
                             onClick={added ? () => navigate("/cart") : handleAdd}
-                            className="btn-green focus-ring flex flex-1 items-center justify-center gap-1.5 rounded-[15px] py-3 text-[14px] font-semibold"
+                            disabled={busy}
+                            className="btn-green focus-ring flex flex-1 items-center justify-center gap-1.5 rounded-[15px] py-3 text-[14px] font-semibold disabled:opacity-70"
                         >
                             {added ? (
                                 <>
@@ -187,7 +259,7 @@ export default function ProductDetail() {
                 </button>
                 <button
                     aria-label="Share"
-                    onClick={() => toast("Link copied")}
+                    onClick={share}
                     className="glass-control focus-ring grid h-10 w-10 place-items-center rounded-[14px]"
                 >
                     <Share2 className="h-[17px] w-[17px] text-primary" strokeWidth={1.9} />
@@ -234,11 +306,11 @@ export default function ProductDetail() {
 
                 {/* Hierarchy */}
                 <div>
-                    <p className="text-[11.5px] font-medium tracking-wide text-secondary">{product.category || "Barrier care"}</p>
+                    <p className="text-[11.5px] font-medium tracking-wide text-secondary">{product.category}</p>
                     <h1 className="font-serif-display mt-0.5 text-[24px] leading-tight text-foreground">{product.name}</h1>
                     <p className="mt-1 text-[13px] text-muted-foreground">{product.purpose}</p>
                     <div className="mt-2 flex items-center gap-3">
-                        <Stars rating={product.rating} count={`${product.reviewCount} reviews`} size={14} />
+                        <RatingSummary stats={stats} size={14} />
                     </div>
                     <div className="mt-2 flex items-end gap-2">
                         <span className="text-[22px] font-semibold text-primary">{formatIDR(price)}</span>
@@ -273,14 +345,9 @@ export default function ProductDetail() {
                     </div>
                 )}
 
-                {/* Stock + shipping */}
+                {/* Shipping */}
                 <div className="glass-shell rounded-[20px]">
                     <div className="inner-card flex items-center gap-3 rounded-[16px] p-3.5">
-                        <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-secondary">
-                            <span className="h-2 w-2 rounded-full bg-[hsl(112_50%_46%)]" />
-                            Ready to ship
-                        </span>
-                        <span className="mx-1 h-4 w-px bg-border" />
                         <Truck className="h-[17px] w-[17px] shrink-0 text-secondary" strokeWidth={1.9} />
                         <p className="text-[12px] text-muted-foreground">
                             Order today · <span className="font-medium text-foreground">{shippingEta}</span>
@@ -288,34 +355,24 @@ export default function ProductDetail() {
                     </div>
                 </div>
 
-                {/* Why this fits your skin */}
+                {/* What this is for — real product metadata, no fabricated match */}
                 <div className="glass-shell rounded-[26px]">
                     <div className="impact-glass rounded-[22px] p-4">
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-1.5">
-                                <Sparkles className="h-[17px] w-[17px] text-secondary" strokeWidth={2} />
-                                <span className="text-[13.5px] font-semibold text-foreground">Why this fits your skin</span>
-                            </div>
-                            <span className="heart-chip inline-flex items-center gap-1 rounded-full px-2 py-[3px] text-[11px] font-semibold text-secondary">
-                                {product.matchScore}% match
-                            </span>
+                        <div className="flex items-center gap-1.5">
+                            <Sparkles className="h-[17px] w-[17px] text-secondary" strokeWidth={2} />
+                            <span className="text-[13.5px] font-semibold text-foreground">What this is for</span>
                         </div>
                         <div className="mt-3 space-y-2">
-                            {product.matchReasons.map((r) => (
-                                <div key={r} className="flex items-center gap-2 text-[12.5px] text-foreground">
+                            {(product.designedFor || []).map((reason) => (
+                                <div key={reason} className="flex items-center gap-2 text-[12.5px] text-foreground">
                                     <Check className="h-4 w-4 shrink-0 text-secondary" strokeWidth={2.2} />
-                                    {r}
+                                    {reason}
                                 </div>
                             ))}
                         </div>
-                        <p className="mt-3 text-[11px] text-muted-foreground">Based on your latest skin profile</p>
-                        <button
-                            onClick={() => setMatchOpen(true)}
-                            className="focus-ring mt-2 inline-flex items-center gap-1 text-[12.5px] font-medium text-secondary"
-                        >
-                            View match details
-                            <ChevronRight className="h-3.5 w-3.5" strokeWidth={2} />
-                        </button>
+                        <p className="mt-3 text-[11px] text-muted-foreground">
+                            {profileReasons.length ? `You selected ${profileReasons.join(" and ")}; this product is tagged for that care context.` : "Based on approved product metadata. This is not a diagnosis or a measured match."}
+                        </p>
                     </div>
                 </div>
 
@@ -330,9 +387,7 @@ export default function ProductDetail() {
                                     <div key={stage} className="flex items-center gap-1.5">
                                         <span
                                             className={`rounded-[11px] px-3 py-2 text-[11.5px] font-medium ${
-                                                active
-                                                    ? "segmented-active"
-                                                    : "bg-pale/60 text-muted-foreground"
+                                                active ? "segmented-active" : "bg-pale/60 text-muted-foreground"
                                             }`}
                                         >
                                             {stage}
@@ -374,7 +429,7 @@ export default function ProductDetail() {
                     </div>
                 </div>
 
-                {/* Ingredient intelligence */}
+                {/* Key ingredients */}
                 <div>
                     <h3 className="font-serif-display mb-2 text-[18px] text-foreground">Key ingredients</h3>
                     <div className="no-scrollbar -mx-4 flex gap-2.5 overflow-x-auto px-4">
@@ -396,11 +451,7 @@ export default function ProductDetail() {
 
                 {/* Accordions */}
                 <div className="flex flex-col gap-2.5">
-                    <Accordion title="Full ingredient list">
-                        Aqua, Cocos Nucifera (Coconut) Oil, Glycerin, Butyrospermum Parkii (Shea) Butter,
-                        Pogostemon Cablin (Patchouli) Oil, Tocopherol, and other skin-friendly botanicals.
-                    </Accordion>
-                    <Accordion title="How to use">{product.usage} Use daily for best comfort.</Accordion>
+                    <Accordion title="How to use">{product.usage}</Accordion>
                     <Accordion title="Who it is for">
                         Formulated for dry, eczema-prone and sensitive skin, including reactive and easily
                         irritated skin types.
@@ -413,6 +464,10 @@ export default function ProductDetail() {
                                 </span>
                             ))}
                         </div>
+                        <p className="mt-2 text-[11.5px]">
+                            YAGI products are cosmetic skincare. They support comfort and barrier care and are not
+                            medical treatments.
+                        </p>
                     </Accordion>
                     <Accordion title="Shipping & returns">
                         Ships within 1 business day. Easy 14-day returns on unopened items.
@@ -420,14 +475,7 @@ export default function ProductDetail() {
                 </div>
 
                 {/* Impact */}
-                <ImpactCard
-                    product={product}
-                    onMethodology={() =>
-                        toast("How we calculate this", {
-                            description: product.impact?.methodology || "Estimated from refill vs. single-use packaging.",
-                        })
-                    }
-                />
+                <ImpactCard product={product} onMethodology={() => navigate("/impact")} />
 
                 {/* If you buy this */}
                 <div className="glass-shell rounded-[22px]">
@@ -440,42 +488,24 @@ export default function ProductDetail() {
                                 </div>
                             ))}
                         </div>
-                        <p className="mt-2 text-[10px] text-muted-foreground">Contribution applied to your impact ledger on purchase</p>
+                        <p className="mt-2 text-[10px] text-muted-foreground">
+                            Contribution applied to your impact ledger once your order is placed
+                        </p>
                     </div>
                 </div>
 
                 <AwardProof onLearn={() => toast("Our impact story", { description: "Recognized by ASEAN SEDP 2025." })} />
 
-                {/* Reviews */}
+                {/* Reviews — real recorded reviews only, no fabricated social proof */}
                 <div>
-                    <div className="flex items-end justify-between">
-                        <h3 className="font-serif-display text-[18px] text-foreground">Loved by sensitive skin routines</h3>
-                    </div>
+                    <h3 className="font-serif-display text-[18px] text-foreground">Customer reviews</h3>
                     <div className="mt-1 flex items-center gap-2">
-                        <span className="text-[26px] font-semibold text-primary">{product.rating}</span>
-                        <div>
-                            <Stars rating={product.rating} size={14} />
-                            <p className="text-[11px] text-muted-foreground">{product.reviewCount} reviews</p>
-                        </div>
-                    </div>
-
-                    <div className="no-scrollbar -mx-4 mt-3 flex gap-2 overflow-x-auto px-4">
-                        {REVIEW_FILTERS.map((f) => (
-                            <button
-                                key={f}
-                                data-active={reviewFilter === f}
-                                onClick={() => setReviewFilter(f)}
-                                className="filter-chip focus-ring shrink-0 rounded-full px-3 py-1.5 text-[11.5px] font-medium"
-                            >
-                                {f}
-                            </button>
-                        ))}
+                        <RatingSummary stats={stats} size={14} showCount />
                     </div>
 
                     <div className="mt-3 flex flex-col gap-2.5">
-                        {shownReviews.slice(0, 3).map((r) => {
+                        {reviews.slice(0, 5).map((r) => {
                             const initial = (r.title?.[0] || "Y").toUpperCase();
-                            const tag = r.tag || "Verified";
                             return (
                                 <div key={r.id || r.created_at} className="glass-shell rounded-[20px]">
                                     <div className="inner-card rounded-[16px] p-3.5">
@@ -485,15 +515,12 @@ export default function ProductDetail() {
                                             </span>
                                             <div className="flex-1">
                                                 <div className="flex items-center gap-1.5">
-                                                    <p className="text-[12.5px] font-semibold text-foreground">{r.title || "YAGI customer"}</p>
+                                                    <p className="text-[12.5px] font-semibold text-foreground">
+                                                        {r.title || "YAGI customer"}
+                                                    </p>
                                                     <BadgeCheck className="h-3.5 w-3.5 text-secondary" strokeWidth={2} />
                                                 </div>
-                                                <div className="flex items-center gap-2">
-                                                    <Stars rating={r.rating} size={11} />
-                                                    <span className="rounded-full bg-pale px-2 py-[1px] text-[9.5px] font-medium text-secondary">
-                                                        {tag}
-                                                    </span>
-                                                </div>
+                                                <Stars rating={r.rating} size={11} />
                                             </div>
                                         </div>
                                         <p className="mt-2 text-[12.5px] leading-relaxed text-muted-foreground">{r.body}</p>
@@ -501,29 +528,28 @@ export default function ProductDetail() {
                                 </div>
                             );
                         })}
-                        {shownReviews.length === 0 && (
-                            <p className="py-4 text-center text-[12px] text-muted-foreground">No reviews yet.</p>
+                        {reviewsLoaded && reviews.length === 0 && (
+                            <div className="glass-shell rounded-[20px]">
+                                <div className="inner-card rounded-[16px] px-4 py-6 text-center">
+                                    <p className="text-[12.5px] font-medium text-foreground">No reviews yet.</p>
+                                    <p className="mt-1 text-[11.5px] text-muted-foreground">
+                                        Reviews appear here after a verified purchase.
+                                    </p>
+                                </div>
+                            </div>
                         )}
                     </div>
-                    <button
-                        onClick={() => toast("All reviews")}
-                        className="glass-control focus-ring mt-3 w-full rounded-[14px] py-3 text-[13px] font-medium text-secondary"
-                    >
-                        View all reviews
-                    </button>
                 </div>
 
                 {/* Pairs well with */}
                 <div>
                     <h3 className="font-serif-display mb-2 text-[18px] text-foreground">Pairs well with</h3>
                     <div className="no-scrollbar -mx-4 flex gap-2.5 overflow-x-auto px-4">
-                        {products.filter((p) => p.id !== product.id)
-                            .slice(0, 3)
-                            .map((p) => (
-                                <div key={p.id} className="w-[150px] shrink-0">
-                                    <ShopProductCard product={p} />
-                                </div>
-                            ))}
+                        {products.filter((p) => p.id !== product.id).slice(0, 3).map((p) => (
+                            <div key={p.id} className="w-[150px] shrink-0">
+                                <ShopProductCard product={p} />
+                            </div>
+                        ))}
                     </div>
                 </div>
 
@@ -538,32 +564,6 @@ export default function ProductDetail() {
                     </div>
                 </div>
             </div>
-
-            {/* Match details sheet */}
-            <BottomSheet open={matchOpen} onClose={() => setMatchOpen(false)} title="Match details" maxH="68%">
-                <div className="pb-2">
-                    <p className="text-[12px] font-semibold text-foreground">Your profile</p>
-                    <div className="mt-1.5 flex flex-wrap gap-2">
-                        {["Dryness", "Sensitive", "Barrier support"].map((t) => (
-                            <span key={t} className="rounded-full bg-pale px-3 py-1 text-[11.5px] font-medium text-secondary">
-                                {t}
-                            </span>
-                        ))}
-                    </div>
-                    <p className="mt-4 text-[12px] font-semibold text-foreground">Product fit</p>
-                    <div className="mt-1.5 space-y-2">
-                        {["Moisture sealing", "Barrier support", "Low-irritation routine position"].map((t) => (
-                            <div key={t} className="flex items-center gap-2 text-[13px] text-foreground">
-                                <Check className="h-4 w-4 text-secondary" strokeWidth={2.2} />
-                                {t}
-                            </div>
-                        ))}
-                    </div>
-                    <p className="mt-4 rounded-[12px] bg-pale/70 p-3 text-[11.5px] leading-relaxed text-muted-foreground">
-                        YAGI skin insights support product discovery and do not replace medical diagnosis.
-                    </p>
-                </div>
-            </BottomSheet>
 
             {/* Fullscreen image viewer */}
             <AnimatePresence>

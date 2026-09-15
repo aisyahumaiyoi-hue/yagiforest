@@ -80,10 +80,16 @@ memory/test_credentials.md
 
 # Mobile development
 android-sdk/
+
+# Environment files: real secrets never get committed. The .example templates
+# are the only env-shaped files allowed in git.
 .env
 .env.*
 *.env
+!.env.example
+!*.env.example
 credentials.json
 *.key
 .credentials
 frontend/node_modules/.cache/default-development/0.pack
+frontend/node_modules/.cache/default-development/8.pack

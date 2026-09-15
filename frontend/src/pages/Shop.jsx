@@ -1,20 +1,8 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-    Search,
-    ShoppingBag,
-    SlidersHorizontal,
-    ArrowUpDown,
-    Sparkles,
-    Check,
-    Heart,
-    Droplets,
-    ShieldCheck,
-    Flame,
-    Leaf,
-    Waves,
-    X,
-    ChevronRight,
+    Search, ShoppingBag, SlidersHorizontal, ArrowUpDown, Sparkles, Check, Heart,
+    Droplets, ShieldCheck, Flame, Leaf, Waves, X, ChevronRight,
 } from "lucide-react";
 import { MobileShell } from "@/components/yagi/MobileShell";
 import { Wordmark } from "@/components/yagi/Wordmark";
@@ -38,11 +26,11 @@ const CONCERN_ICONS = {
 const FILTER_GROUPS = [
     { key: "concern", label: "Skin concern", options: ["Eczema care", "Dryness", "Redness", "Sensitive skin", "Itching", "Skin barrier"] },
     { key: "type", label: "Product type", options: ["Cleanser", "Moisturizer", "Balm", "Serum", "Shampoo", "Body care"] },
-    { key: "routine", label: "Routine", options: ["Morning", "Evening", "Anytime"] },
-    { key: "pref", label: "Preference", options: ["Fragrance free", "Family friendly", "Refillable", "Best seller"] },
+    // "Routine" and "Preference" groups were removed: they had no effect on
+    // results, so they were decorative controls rather than real filters.
 ];
 
-const SORTS = ["Recommended", "Best selling", "Newest", "Price: low to high", "Price: high to low"];
+const SORTS = ["Recommended", "Best selling", "Price: low to high", "Price: high to low"];
 
 const matchesType = (p, token) => {
     const s = (p.name + " " + p.purpose + " " + p.category).toLowerCase();
@@ -55,19 +43,15 @@ const matchesType = (p, token) => {
     return true;
 };
 
-const matchesPref = (p, token) => {
-    const map = { Refillable: "Refill available", "Best seller": "Best seller", "Fragrance free": "Fragrance free", "Family friendly": "Family friendly" };
-    return (p.badges || []).includes(map[token]);
-};
-
 export default function Shop() {
     const navigate = useNavigate();
-    const { products, cartCount } = useYagi();
+    const { products, cartCount, catalogLoaded, recommendations, careProfile } = useYagi();
 
+    const [query, setQuery] = useState("");
     const [concern, setConcern] = useState("For you");
     const [category, setCategory] = useState("All");
     const [sort, setSort] = useState("Recommended");
-    const [filters, setFilters] = useState({ concern: [], type: [], routine: [], pref: [] });
+    const [filters, setFilters] = useState({ concern: [], type: [] });
     const [filterOpen, setFilterOpen] = useState(false);
     const [sortOpen, setSortOpen] = useState(false);
     const [whyProduct, setWhyProduct] = useState(null);
@@ -79,19 +63,29 @@ export default function Shop() {
     );
 
     const filtered = useMemo(() => {
-        let list = [...products];
+         let list = [...(concern === "For you" && recommendations.length ? recommendations : products)];
+        const q = query.trim().toLowerCase();
+        if (q) {
+            list = list.filter((p) =>
+                p.name.toLowerCase().includes(q) ||
+                (p.purpose || "").toLowerCase().includes(q) ||
+                (p.category || "").toLowerCase().includes(q) ||
+                (p.skinConcerns || []).some((c) => c.toLowerCase().includes(q))
+            );
+        }
         if (concern !== "For you") list = list.filter((p) => p.skinConcerns.includes(concern));
-        if (category !== "All") list = list.filter((p) => p.category === category || category === "Bundles" ? p.category === category : p.category === category);
+        if (category !== "All") list = list.filter((p) => p.category === category);
         if (filters.concern.length) list = list.filter((p) => filters.concern.some((c) => p.skinConcerns.includes(c)));
         if (filters.type.length) list = list.filter((p) => filters.type.some((t) => matchesType(p, t)));
-        if (filters.pref.length) list = list.filter((p) => filters.pref.some((t) => matchesPref(p, t)));
 
         if (sort === "Price: low to high") list.sort((a, b) => a.price - b.price);
         else if (sort === "Price: high to low") list.sort((a, b) => b.price - a.price);
-        else if (sort === "Best selling") list.sort((a, b) => b.reviewCount - a.reviewCount);
-        else if (sort === "Recommended") list.sort((a, b) => b.matchScore - a.matchScore);
+        else if (sort === "Best selling") {
+            // Editorial badge order - YAGI has no real sales ranking to sort by.
+            list.sort((a, b) => (b.badges?.includes("Best seller") ? 1 : 0) - (a.badges?.includes("Best seller") ? 1 : 0));
+        }
         return list;
-    }, [products, concern, category, filters, sort]);
+    }, [products, recommendations, query, concern, category, filters, sort]);
 
     const toggleDraft = (g, v) =>
         setDraft((d) => ({ ...d, [g]: d[g].includes(v) ? d[g].filter((x) => x !== v) : [...d[g], v] }));
@@ -115,8 +109,15 @@ export default function Shop() {
                     <input
                         aria-label="Search products or skin concerns"
                         placeholder="Search products or skin concerns"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
                         className="w-full min-w-0 bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground/80 outline-none"
                     />
+                    {query && (
+                        <button aria-label="Clear search" onClick={() => setQuery("")} className="text-muted-foreground">
+                            <X className="h-4 w-4" strokeWidth={2.2} />
+                        </button>
+                    )}
                 </label>
                 <button
                     aria-label="Cart"
@@ -136,33 +137,33 @@ export default function Shop() {
                 className="flex flex-col gap-3.5 px-4 pt-1"
                 style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 120px)" }}
             >
-                {/* Editorial intro */}
+                {/* Editorial intro — no personalisation claim until Phase 2. */}
                 <div className="pt-1">
                     <h1 className="font-serif-display text-[24px] leading-tight text-foreground">
                         Care made for sensitive skin
                     </h1>
                     <p className="mt-1 text-[13px] text-muted-foreground">
-                        Find what fits your skin, routine and values.
+                        {careProfile ? "Based on your care profile, with the full catalog always available." : "Find what fits your skin, routine and values."}
                     </p>
                 </div>
 
-                {/* Personalized recommendation strip */}
+                {/* Assist strip -> real Ask YAGI */}
                 <div className="glass-shell rounded-[24px]">
                     <div className="inner-card flex items-center gap-3 rounded-[20px] p-3.5">
                         <span className="grid h-11 w-11 shrink-0 place-items-center rounded-[14px] bg-pale/80">
                             <Sparkles className="h-[21px] w-[21px] text-secondary" strokeWidth={1.9} />
                         </span>
                         <div className="min-w-0 flex-1">
-                            <p className="text-[13.5px] font-semibold text-foreground">Recommended for your skin</p>
+                            <p className="text-[13.5px] font-semibold text-foreground">Not sure what you need?</p>
                             <p className="truncate text-[11.5px] text-muted-foreground">
-                                Barrier support · Dryness · Sensitive
+                                Ask YAGI about your skin and products
                             </p>
                         </div>
                         <button
-                            onClick={() => setConcern("Skin barrier")}
+                            onClick={() => navigate("/ask-yagi")}
                             className="btn-green focus-ring shrink-0 rounded-[13px] px-3 py-2 text-[12px] font-semibold"
                         >
-                            See matches
+                            Ask YAGI
                         </button>
                     </div>
                 </div>
@@ -186,16 +187,21 @@ export default function Shop() {
                     })}
                 </div>
 
-                {/* Category chips */}
+                {/* Category chips — only categories that actually contain products */}
                 <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4">
                     {CATEGORIES.map((c) => {
                         const active = category === c;
+                        const count = c === "All" ? products.length : products.filter((p) => p.category === c).length;
+                        const unavailable = count === 0;
                         return (
                             <button
                                 key={c}
                                 onClick={() => setCategory(c)}
+                                disabled={unavailable}
                                 data-active={active}
-                                className="filter-chip focus-ring shrink-0 rounded-full px-3.5 py-1.5 text-[12px] font-medium"
+                                className={`filter-chip focus-ring shrink-0 rounded-full px-3.5 py-1.5 text-[12px] font-medium ${
+                                    unavailable ? "opacity-45" : ""
+                                }`}
                             >
                                 {c}
                             </button>
@@ -242,20 +248,27 @@ export default function Shop() {
                 {filtered.length === 0 ? (
                     <div className="glass-shell rounded-[24px]">
                         <div className="inner-card rounded-[20px] px-6 py-10 text-center">
-                            <h3 className="font-serif-display text-[20px] text-foreground">Nothing matched yet.</h3>
+                            <h3 className="font-serif-display text-[20px] text-foreground">
+                                {catalogLoaded ? "Nothing matched yet." : "Loading care…"}
+                            </h3>
                             <p className="mt-1 text-[12.5px] text-muted-foreground">
-                                Try removing a filter or explore all YAGI care.
+                                {catalogLoaded
+                                    ? "Try removing a filter or explore all YAGI care."
+                                    : "Fetching the YAGI catalogue."}
                             </p>
-                            <button
-                                onClick={() => {
-                                    setFilters({ concern: [], type: [], routine: [], pref: [] });
-                                    setConcern("For you");
-                                    setCategory("All");
-                                }}
-                                className="btn-green focus-ring mx-auto mt-4 rounded-[14px] px-4 py-2.5 text-[13px] font-semibold"
-                            >
-                                Clear filters
-                            </button>
+                            {catalogLoaded && (
+                                <button
+                                    onClick={() => {
+                                        setFilters({ concern: [], type: [] });
+                                        setConcern("For you");
+                                        setCategory("All");
+                                        setQuery("");
+                                    }}
+                                    className="btn-green focus-ring mx-auto mt-4 rounded-[14px] px-4 py-2.5 text-[13px] font-semibold"
+                                >
+                                    Clear filters
+                                </button>
+                            )}
                         </div>
                     </div>
                 ) : (
@@ -266,7 +279,7 @@ export default function Shop() {
                             ))}
                         </div>
 
-                        <ImpactCard onMethodology={() => toast("Impact methodology", { description: "Estimated from refill vs. single-use packaging mass." })} />
+                        <ImpactCard onMethodology={() => navigate("/impact")} />
 
                         <div className="grid grid-cols-2 gap-2.5">
                             {filtered.slice(4).map((p) => (
@@ -287,7 +300,7 @@ export default function Shop() {
                 footer={
                     <div className="flex items-center gap-2">
                         <button
-                            onClick={() => setDraft({ concern: [], type: [], routine: [], pref: [] })}
+                            onClick={() => setDraft({ concern: [], type: [] })}
                             className="glass-control focus-ring rounded-[14px] px-4 py-3 text-[13px] font-medium text-secondary"
                         >
                             Reset
@@ -299,7 +312,7 @@ export default function Shop() {
                             }}
                             className="btn-green focus-ring flex-1 rounded-[15px] py-3 text-[14px] font-semibold"
                         >
-                            Show {filtered.length} products
+                            Apply filters
                         </button>
                     </div>
                 }
@@ -348,30 +361,28 @@ export default function Shop() {
                 </div>
             </BottomSheet>
 
-            {/* Why it fits sheet */}
+            {/* Why it fits sheet — real product metadata, no fabricated profile */}
             <BottomSheet
                 open={!!whyProduct}
                 onClose={() => setWhyProduct(null)}
-                title="Why it fits you"
+                title="What this product is for"
                 maxH="62%"
             >
                 {whyProduct && (
                     <div className="pb-2">
                         <p className="text-[13px] leading-relaxed text-muted-foreground">
-                            Your latest scan shows <span className="font-medium text-foreground">dryness</span> and a{" "}
-                            <span className="font-medium text-foreground">weakened barrier</span>. This formula is
-                            positioned in your routine as a moisture-sealing step.
+                            {whyProduct.purpose}
                         </p>
                         <div className="mt-4 space-y-2">
-                            {whyProduct.matchReasons.map((r) => (
-                                <div key={r} className="flex items-center gap-2 text-[13px] text-foreground">
+                            {(whyProduct.designedFor || []).map((f) => (
+                                <div key={f} className="flex items-center gap-2 text-[13px] text-foreground">
                                     <Check className="h-4 w-4 text-secondary" strokeWidth={2.2} />
-                                    {r}
+                                    {f}
                                 </div>
                             ))}
                         </div>
-                        <p className="mt-4 text-[11px] text-muted-foreground">
-                            YAGI skin insights support product discovery and do not replace medical diagnosis.
+                        <p className="mt-4 rounded-[12px] bg-pale/60 p-3 text-[11.5px] leading-relaxed text-muted-foreground">
+                            This describes what the product is designed for, not a diagnosis or a measured match.
                         </p>
                         <button
                             onClick={() => {

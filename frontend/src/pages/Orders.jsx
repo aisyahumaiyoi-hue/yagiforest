@@ -1,50 +1,100 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Package } from "lucide-react";
+import { toast } from "sonner";
 import { MobileShell } from "@/components/yagi/MobileShell";
 import { TopBar } from "@/components/yagi/TopBar";
 import { useYagi } from "@/store/YagiContext";
 import { api } from "@/lib/api";
 import { formatIDR } from "@/lib/format";
+import { formatBusinessShortDate } from "@/lib/datetime";
 
-const STATUS_LABEL = { awaiting_transfer: "Awaiting transfer", under_review: "Under review", paid: "Paid", pending: "Pending", rejected: "Proof rejected" };
+/**
+ * Payment status wording. "Order created" and "Payment confirmed" are kept
+ * strictly separate: an order is never shown as paid before an admin has
+ * verified the transfer.
+ */
+const PAYMENT_LABEL = {
+    awaiting_transfer: "Awaiting transfer",
+    under_review: "Proof under review",
+    paid: "Payment confirmed",
+    rejected: "Proof rejected",
+};
+
 const TIMELINE = ["Order placed", "Transfer submitted", "Payment confirmed", "Preparing", "Shipped", "Delivered"];
-const EVENT_MAP = { transfer_submitted: 1, payment_confirmed: 2, transfer_rejected: 0 };
+const EVENT_MAP = { order_placed: 0, transfer_submitted: 1, payment_confirmed: 2 };
 
 export default function Orders() {
     const navigate = useNavigate();
-    const { isCustomer } = useYagi();
+    const { isCustomer, ready } = useYagi();
     const [orders, setOrders] = useState(null);
+    const [uploadingFor, setUploadingFor] = useState(null);
 
-    const reload = () => api.getOrders().then((r) => setOrders(r.items)).catch(() => setOrders([]));
+    const reload = () =>
+        api.getOrders()
+            .then((r) => setOrders(r.items))
+            .catch((e) => {
+                setOrders([]);
+                toast("Couldn\u2019t load your orders", { description: e.message });
+            });
+
     useEffect(() => {
         if (isCustomer) reload();
-        else setOrders([]);
-    }, [isCustomer]);
+        else if (ready) setOrders([]);
+    }, [isCustomer, ready]);
 
     const uploadProof = (orderNumber) => (e) => {
         const file = e.target.files?.[0];
+        e.target.value = ""; // allow re-selecting the same file
         if (!file) return;
+        if (!file.type.startsWith("image/")) {
+            toast("Please choose an image file", { description: "JPG, PNG or WEBP of your transfer receipt." });
+            return;
+        }
+        if (file.size > 3 * 1024 * 1024) {
+            toast("That image is too large", { description: "Please use a photo under 3 MB." });
+            return;
+        }
         const reader = new FileReader();
+        reader.onerror = () => toast("We couldn\u2019t read that file", { description: "Please try another photo." });
         reader.onload = async () => {
+            setUploadingFor(orderNumber);
             try {
                 await api.submitProof(orderNumber, reader.result);
-                reload();
-            } catch (err) { /* noop */ }
+                toast("Transfer proof submitted", { description: "Our team will verify it shortly." });
+                await reload();
+            } catch (err) {
+                toast("Upload failed", { description: err.message });
+            } finally {
+                setUploadingFor(null);
+            }
         };
         reader.readAsDataURL(file);
     };
+
+    const loading = isCustomer && orders === null;
 
     return (
         <MobileShell nav={false}>
             <TopBar title="Your orders" />
             <div className="flex flex-col gap-3 px-4 pt-1 pb-24">
-                {!isCustomer && (
+                {!isCustomer && ready && (
                     <div className="pt-16 text-center">
                         <p className="text-[13px] text-muted-foreground">Sign in to see your orders.</p>
                         <button onClick={() => navigate("/auth")} className="btn-green focus-ring mt-4 rounded-[14px] px-5 py-2.5 text-[13px] font-semibold">Sign in</button>
                     </div>
                 )}
+
+                {loading && (
+                    <div className="flex flex-col gap-3">
+                        {[0, 1].map((i) => (
+                            <div key={i} className="glass-shell rounded-[22px]">
+                                <div className="inner-card h-[132px] animate-pulse rounded-[18px] bg-pale/40" />
+                            </div>
+                        ))}
+                    </div>
+                )}
+
                 {isCustomer && orders && orders.length === 0 && (
                     <div className="flex flex-col items-center pt-20 text-center">
                         <span className="grid h-16 w-16 place-items-center rounded-full bg-pale"><Package className="h-8 w-8 text-secondary" strokeWidth={1.6} /></span>
@@ -52,56 +102,84 @@ export default function Orders() {
                         <button onClick={() => navigate("/shop")} className="btn-green focus-ring mt-4 rounded-[14px] px-5 py-2.5 text-[13px] font-semibold">Explore care</button>
                     </div>
                 )}
-                {isCustomer && (orders || []).map((o) => (
-                    <div key={o.order_number} className="glass-shell rounded-[22px]">
-                        <div className="inner-card rounded-[18px] p-4">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <p className="text-[13px] font-semibold text-foreground">#{o.order_number}</p>
-                                    <p className="text-[10.5px] text-muted-foreground">{new Date(o.placed_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} · {o.shipping_method}</p>
+
+                {(orders || []).map((o) => {
+                    const placed = formatBusinessShortDate(o.placed_at);
+                    const canUpload = ["awaiting_transfer", "rejected"].includes(o.payment_status);
+                    const uploading = uploadingFor === o.order_number;
+                    let stage = 0;
+                    (o.events || []).forEach((ev) => {
+                        if (EVENT_MAP[ev.type] != null) stage = Math.max(stage, EVENT_MAP[ev.type]);
+                    });
+                    if (o.status === "shipped") stage = 4;
+                    if (o.status === "delivered") stage = 5;
+
+                    return (
+                        <div key={o.order_number} className="glass-shell rounded-[22px]">
+                            <div className="inner-card rounded-[18px] p-4">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-[13px] font-semibold text-foreground">#{o.order_number}</p>
+                                        <p className="text-[10.5px] text-muted-foreground">
+                                            {placed} · {o.shipping_method}
+                                        </p>
+                                    </div>
+                                    <span className="rounded-full bg-pale px-2.5 py-1 text-[10px] font-semibold text-secondary">
+                                        {PAYMENT_LABEL[o.payment_status] || o.payment_status}
+                                    </span>
                                 </div>
-                                <span className="rounded-full bg-pale px-2.5 py-1 text-[10px] font-semibold text-secondary">{STATUS_LABEL[o.payment_status] || o.status}</span>
-                            </div>
-                            <div className="mt-3 flex gap-2">
-                                {o.items.map((it, i) => (
-                                    <div key={i} className="h-12 w-12 overflow-hidden rounded-[10px] bg-pale/50">
-                                        <img src={it.image} alt={it.name} className="h-full w-full object-cover" />
-                                    </div>
-                                ))}
-                            </div>
-                            <div className="mt-3 flex items-center justify-between border-t border-border/60 pt-3">
-                                <span className="text-[11.5px] text-muted-foreground">+{o.points_earned} points · {o.items.length} items</span>
-                                <span className="text-[14px] font-semibold text-primary">{formatIDR(o.grand_total)}</span>
-                            </div>
 
-                            {/* Timeline */}
-                            {(() => {
-                                let stage = 0;
-                                (o.events || []).forEach((ev) => { if (EVENT_MAP[ev.type] != null) stage = Math.max(stage, EVENT_MAP[ev.type]); });
-                                if (o.status === "shipped") stage = 4; if (o.status === "delivered") stage = 5;
-                                return (
-                                    <div className="mt-3 flex items-center gap-1">
-                                        {TIMELINE.map((t, i) => (
-                                            <div key={t} className="flex flex-1 flex-col items-center last:flex-none">
-                                                <span className={`h-2 w-2 rounded-full ${i <= stage ? "bg-[hsl(120_48%_46%)]" : "bg-[hsl(140_15%_82%)]"}`} />
-                                            </div>
-                                        ))}
-                                    </div>
-                                );
-                            })()}
+                                <div className="mt-3 flex gap-2">
+                                    {o.items.map((it, i) => (
+                                        <div key={i} className="h-12 w-12 overflow-hidden rounded-[10px] bg-pale/50">
+                                            <img src={it.image} alt={it.name} className="h-full w-full object-cover" />
+                                        </div>
+                                    ))}
+                                </div>
 
-                            {(o.payment_status === "awaiting_transfer" || o.payment_status === "rejected") && (
-                                <label className="btn-green focus-ring mt-3 block cursor-pointer rounded-[12px] py-2.5 text-center text-[12.5px] font-semibold">
-                                    Upload transfer proof
-                                    <input type="file" accept="image/*,application/pdf" className="hidden" onChange={uploadProof(o.order_number)} />
-                                </label>
-                            )}
-                            {o.payment_status === "under_review" && (
-                                <p className="mt-3 rounded-[10px] bg-pale/60 py-2 text-center text-[11.5px] font-medium text-secondary">Proof submitted · under review</p>
-                            )}
+                                <div className="mt-3 flex items-center justify-between border-t border-border/60 pt-3">
+                                    <span className="text-[11.5px] text-muted-foreground">
+                                        +{o.points_earned} points pending · {o.items.length} items
+                                    </span>
+                                    <span className="text-[14px] font-semibold text-primary">{formatIDR(o.grand_total)}</span>
+                                </div>
+
+                                {/* Timeline */}
+                                <div className="mt-3 flex items-center gap-1" aria-label="Order progress">
+                                    {TIMELINE.map((t, i) => (
+                                        <div key={t} className="flex flex-1 flex-col items-center gap-1 last:flex-none">
+                                            <span className={`h-2 w-2 rounded-full ${i <= stage ? "bg-[hsl(120_48%_46%)]" : "bg-[hsl(140_15%_82%)]"}`} />
+                                        </div>
+                                    ))}
+                                </div>
+                                <p className="mt-1.5 text-[10.5px] text-muted-foreground">{TIMELINE[stage]}</p>
+
+                                {canUpload && (
+                                    <label className={`btn-green focus-ring mt-3 block cursor-pointer rounded-[12px] py-2.5 text-center text-[12.5px] font-semibold ${uploading ? "opacity-70" : ""}`}>
+                                        {uploading ? "Uploading…" : "Upload transfer proof"}
+                                        <input
+                                            type="file"
+                                            accept="image/jpeg,image/png,image/webp"
+                                            className="hidden"
+                                            disabled={uploading}
+                                            onChange={uploadProof(o.order_number)}
+                                        />
+                                    </label>
+                                )}
+                                {o.payment_status === "under_review" && (
+                                    <p className="mt-3 rounded-[10px] bg-pale/60 py-2 text-center text-[11.5px] font-medium text-secondary">
+                                        Proof submitted · under review
+                                    </p>
+                                )}
+                                {o.payment_status === "paid" && (
+                                    <p className="mt-3 rounded-[10px] bg-pale/60 py-2 text-center text-[11.5px] font-medium text-secondary">
+                                        Payment confirmed
+                                    </p>
+                                )}
+                            </div>
                         </div>
-                    </div>
-                ))}
+                    );
+                })}
             </div>
         </MobileShell>
     );

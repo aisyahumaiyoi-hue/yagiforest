@@ -1,45 +1,59 @@
 import { Sun, Sparkles, MessageCircle } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useYagi } from "@/store/YagiContext";
 
-export const InsightCards = ({ onConsult }) => {
-    const { wellness, products } = useYagi();
+/**
+ * Insight cards. Each card must lead to a real destination:
+ *  - Today's routine  -> /routine
+ *  - Ask YAGI         -> /ask-yagi (previously mislabelled "Consult expert",
+ *                        which implied a human clinician service YAGI does not run)
+ *  - Shop             -> /shop
+ */
+export const InsightCards = () => {
+    const navigate = useNavigate();
+    const { wellness, products, isEnabled } = useYagi();
     const completed = wellness?.routine_completed_today ?? 0;
     const total = wellness?.routine_total_today ?? 0;
     const routineMeta = total ? `${completed} of ${total} steps` : "No steps yet";
-    const recommendedThumb = products[0]?.images?.[0];
+    const shopThumb = products[0]?.images?.[0];
+
+    const askEnabled = isEnabled("skin_agent_enabled");
 
     const INSIGHTS = [
         {
             key: "routine",
             title: "Today\u2019s routine",
             meta: routineMeta,
-            desc: "Keep your barrier strong & calm",
+            desc: "Check in on today\u2019s steps",
             Icon: Sun,
+            onOpen: () => navigate("/routine"),
         },
         {
-            key: "recommended",
-            title: "Recommended",
-            meta: "For you",
-            desc: "Curated picks for your skin",
-            thumb: recommendedThumb,
+            key: "shop",
+            title: "Shop care",
+            meta: `${products.length} products`,
+            desc: "Gentle, sensitive-skin care",
+            thumb: shopThumb,
             Icon: Sparkles,
+            onOpen: () => navigate("/shop"),
         },
-        {
-            key: "consult",
-            title: "Consult expert",
-            meta: "Online",
+        askEnabled && {
+            key: "ask",
+            title: "Ask YAGI",
+            meta: "Available",
             online: true,
-            desc: "Get personalized advice",
+            desc: "Care questions, answered",
             Icon: MessageCircle,
+            onOpen: () => navigate("/ask-yagi"),
         },
-    ];
+    ].filter(Boolean);
 
     return (
         <div className="grid grid-cols-3 gap-2.5">
-            {INSIGHTS.map(({ key, title, meta, desc, Icon, thumb, online }) => (
+            {INSIGHTS.map(({ key, title, meta, desc, Icon, thumb, online, onOpen }) => (
                 <button
                     key={key}
-                    onClick={() => onConsult?.(key)}
+                    onClick={onOpen}
                     className="glass-shell focus-ring rounded-[22px] text-left transition-transform active:scale-[0.97]"
                 >
                     <div className="inner-card flex h-[118px] flex-col rounded-[18px] p-2.5">

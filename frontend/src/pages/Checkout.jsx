@@ -17,18 +17,23 @@ const SHIPPING_FALLBACK = [
 ];
 const SHIPPING_ICONS = { regular: Truck, express: Zap };
 
-const Field = ({ label, helper, value, onChange, ...props }) => (
+const Field = ({ label, helper, error, value, onChange, ...props }) => (
     <label className="block">
         <span className="mb-1 block text-[12px] font-medium text-foreground">{label}</span>
-        <span className="checkout-field flex items-center rounded-[13px] px-3.5 py-3">
+        <span className={`checkout-field flex items-center rounded-[13px] px-3.5 py-3 ${error ? "ring-2 ring-[hsl(4_72%_60%)]" : ""}`}>
             <input
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
+                aria-invalid={error ? "true" : undefined}
                 className="w-full bg-transparent text-[14px] text-foreground placeholder:text-muted-foreground/70 outline-none"
                 {...props}
             />
         </span>
-        {helper && <span className="mt-1 block text-[11px] text-muted-foreground">{helper}</span>}
+        {error ? (
+            <span className="mt-1 block text-[11px] font-medium text-[hsl(4_72%_50%)]">{error}</span>
+        ) : (
+            helper && <span className="mt-1 block text-[11px] text-muted-foreground">{helper}</span>
+        )}
     </label>
 );
 
@@ -38,9 +43,9 @@ export default function Checkout() {
 
     const [step, setStep] = useState(0);
     const [shipping, setShipping] = useState("regular");
-    const [showApt, setShowApt] = useState(false);
     const [authOpen, setAuthOpen] = useState(false);
     const [placing, setPlacing] = useState(false);
+    const [errors, setErrors] = useState({});
 
     const shippingList = (shippingOptions && shippingOptions.length ? shippingOptions : SHIPPING_FALLBACK)
         .map((s) => ({ ...s, Icon: SHIPPING_ICONS[s.id] || Truck }));
@@ -52,7 +57,32 @@ export default function Checkout() {
     const shipCost = shippingList.find((s) => s.id === shipping)?.price || 0;
     const total = cartSubtotal + shipCost;
 
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const digits = (v) => (v || "").replace(/\D/g, "");
+
+    const validateStep0 = () => {
+        const e = {};
+        if (!EMAIL_RE.test(form.email.trim())) e.email = "Enter a valid email address.";
+        if (digits(form.phone).length < 8) e.phone = "Enter a reachable phone number.";
+        setErrors(e);
+        return Object.keys(e).length === 0;
+    };
+
+    const validateStep1 = () => {
+        const e = {};
+        if (!form.full_name.trim()) e.full_name = "Enter the recipient\u2019s full name.";
+        if (!form.address.trim()) e.address = "Enter the street address.";
+        if (!form.city.trim()) e.city = "Enter the city.";
+        if (!form.province.trim()) e.province = "Enter the province.";
+        if (!form.postal_code.trim()) e.postal_code = "Enter the postal code.";
+        setErrors(e);
+        return Object.keys(e).length === 0;
+    };
+
     const goPayment = () => {
+        // Contact and delivery must be real before an account is created, so the
+        // customer's details carry through auth instead of being replaced later.
+        if (!validateStep0()) return;
         if (!isCustomer) {
             setAuthOpen(true);
             return;
@@ -61,21 +91,37 @@ export default function Checkout() {
     };
 
     const next = () => {
-        if (step === 1) return goPayment();
+        if (step === 0) {
+            if (!validateStep0()) return;
+            setStep(1);
+            return;
+        }
+        if (step === 1) {
+            if (!validateStep1()) return;
+            goPayment();
+            return;
+        }
         setStep((s) => Math.min(3, s + 1));
     };
 
     const doPlaceOrder = async () => {
+        if (placing) return; // guard against double submit
+        if (!validateStep0() || !validateStep1()) {
+            setStep(0);
+            toast("Please complete your delivery details");
+            return;
+        }
         setPlacing(true);
         try {
+            // Real contact data only. No placeholder identity is ever substituted.
             await placeOrder({
-                email: form.email || "guest@yagi.co",
-                phone: form.phone,
-                full_name: form.full_name || "YAGI Customer",
-                address: form.address || "-",
-                city: form.city || "-",
-                province: form.province || "-",
-                postal_code: form.postal_code || "-",
+                email: form.email.trim(),
+                phone: form.phone.trim(),
+                full_name: form.full_name.trim(),
+                address: form.address.trim(),
+                city: form.city.trim(),
+                province: form.province.trim(),
+                postal_code: form.postal_code.trim(),
                 shipping_method: shipping,
             });
             navigate("/checkout/success");
@@ -152,7 +198,7 @@ export default function Checkout() {
                                         <div className="inner-card flex items-center justify-between rounded-[16px] p-3.5">
                                             <div>
                                                 <p className="text-[13px] font-semibold text-foreground">Continue as guest</p>
-                                                <p className="text-[11px] text-muted-foreground">No account needed to browse & prepare your order.</p>
+                                                <p className="text-[11px] text-muted-foreground">Browse freely &mdash; you&rsquo;ll sign in before payment.</p>
                                             </div>
                                             <Check className="h-5 w-5 text-secondary" strokeWidth={2.4} />
                                         </div>
@@ -160,8 +206,16 @@ export default function Checkout() {
                                     <div className="glass-shell rounded-[22px]">
                                         <div className="inner-card flex flex-col gap-3 rounded-[18px] p-4">
                                             <p className="text-[13.5px] font-semibold text-foreground">Contact</p>
-                                            <Field label="Email address" type="email" autoComplete="email" placeholder="you@email.com" value={form.email} onChange={set("email")} />
-                                            <Field label="Phone number" type="tel" autoComplete="tel" placeholder="+62 …" helper="Used only for delivery updates" value={form.phone} onChange={set("phone")} />
+                                            <Field
+                                                label="Email address" type="email" autoComplete="email"
+                                                placeholder="you@email.com" value={form.email} onChange={set("email")}
+                                                error={errors.email}
+                                            />
+                                            <Field
+                                                label="Phone number" type="tel" autoComplete="tel"
+                                                placeholder="+62 …" helper="Used only for delivery updates"
+                                                value={form.phone} onChange={set("phone")} error={errors.phone}
+                                            />
                                         </div>
                                     </div>
                                 </>
@@ -172,18 +226,16 @@ export default function Checkout() {
                                     <div className="glass-shell rounded-[22px]">
                                         <div className="inner-card flex flex-col gap-3 rounded-[18px] p-4">
                                             <p className="text-[13.5px] font-semibold text-foreground">Shipping address</p>
-                                            <Field label="Full name" autoComplete="name" placeholder="Full name" value={form.full_name} onChange={set("full_name")} />
-                                            <Field label="Address" autoComplete="street-address" placeholder="Street address" value={form.address} onChange={set("address")} />
-                                            <Field label="City" autoComplete="address-level2" placeholder="City" value={form.city} onChange={set("city")} />
-                                            <Field label="Province" autoComplete="address-level1" placeholder="Province" value={form.province} onChange={set("province")} />
-                                            <Field label="Postal code" autoComplete="postal-code" placeholder="Postal code" value={form.postal_code} onChange={set("postal_code")} />
-                                            {showApt ? (
-                                                <Field label="Apartment or unit" placeholder="Apt, unit, floor (optional)" value="" onChange={() => {}} />
-                                            ) : (
-                                                <button onClick={() => setShowApt(true)} className="self-start text-[12px] font-medium text-secondary underline underline-offset-2">
-                                                    + Add apartment or unit
-                                                </button>
-                                            )}
+                                            <Field label="Full name" autoComplete="name" placeholder="Full name"
+                                                   value={form.full_name} onChange={set("full_name")} error={errors.full_name} />
+                                            <Field label="Address" autoComplete="street-address" placeholder="Street address"
+                                                   value={form.address} onChange={set("address")} error={errors.address} />
+                                            <Field label="City" autoComplete="address-level2" placeholder="City"
+                                                   value={form.city} onChange={set("city")} error={errors.city} />
+                                            <Field label="Province" autoComplete="address-level1" placeholder="Province"
+                                                   value={form.province} onChange={set("province")} error={errors.province} />
+                                            <Field label="Postal code" autoComplete="postal-code" placeholder="Postal code"
+                                                   value={form.postal_code} onChange={set("postal_code")} error={errors.postal_code} />
                                         </div>
                                     </div>
 
@@ -222,8 +274,11 @@ export default function Checkout() {
                                     </div>
                                     <div className="glass-shell rounded-[18px]">
                                         <div className="impact-glass rounded-[14px] p-4 text-[12.5px] leading-relaxed text-muted-foreground">
-                                            After you place the order we’ll show YAGI’s bank account and your order number.
-                                            Transfer the exact total, and your order is confirmed once received.
+                                            After you place the order we&rsquo;ll show YAGI&rsquo;s bank account and your
+                                            order number. Your order is <span className="font-medium text-foreground">created</span>{" "}
+                                            right away and marked <span className="font-medium text-foreground">awaiting transfer</span>.
+                                            It is only <span className="font-medium text-foreground">confirmed as paid</span> once
+                                            our team verifies your transfer.
                                         </div>
                                     </div>
                                 </>
@@ -304,9 +359,8 @@ export default function Checkout() {
                         : `Place order · ${formatIDR(total)}`}
                 </button>
                 <div className="mt-2 flex items-center justify-center gap-3 text-[11px] text-muted-foreground">
-                    <span className="flex items-center gap-1"><Lock className="h-3 w-3" strokeWidth={2} /> Secure payment</span>
-                    <span>Returns</span>
-                    <span>Privacy</span>
+                    <span className="flex items-center gap-1"><Lock className="h-3 w-3" strokeWidth={2} /> Payment by bank transfer</span>
+                    <span>Verified by our team</span>
                 </div>
             </div>
 

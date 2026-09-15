@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Heart, Plus, ArrowRight, Check } from "lucide-react";
+import { toast } from "sonner";
 import { useYagi } from "@/store/YagiContext";
 import { formatIDR } from "@/lib/format";
 
@@ -9,6 +10,22 @@ const ProductCard = ({ product }) => {
     const { toggleSaved, isSaved, addToCart } = useYagi();
     const saved = isSaved(product.id);
     const [added, setAdded] = useState(false);
+    const [busy, setBusy] = useState(false);
+
+    const handleAdd = async (e) => {
+        e.stopPropagation();
+        if (busy) return;
+        setBusy(true);
+        try {
+            await addToCart(product.id, product.variants?.[0]?.id, 1);
+            setAdded(true);
+            setTimeout(() => setAdded(false), 900);
+        } catch (err) {
+            toast("Couldn\u2019t add to bag", { description: err.message });
+        } finally {
+            setBusy(false);
+        }
+    };
 
     return (
         <div
@@ -49,13 +66,9 @@ const ProductCard = ({ product }) => {
                         </span>
                         <button
                             aria-label={`Add ${product.name} to bag`}
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                addToCart(product.id, product.variants?.[0]?.id, 1);
-                                setAdded(true);
-                                setTimeout(() => setAdded(false), 900);
-                            }}
-                            className="product-add focus-ring grid h-[32px] w-[32px] shrink-0 place-items-center rounded-[11px]"
+                            onClick={handleAdd}
+                            disabled={busy}
+                            className="product-add focus-ring grid h-[32px] w-[32px] shrink-0 place-items-center rounded-[11px] disabled:opacity-60"
                         >
                             {added ? (
                                 <Check className="h-[17px] w-[17px]" strokeWidth={2.4} />
@@ -70,13 +83,37 @@ const ProductCard = ({ product }) => {
     );
 };
 
-export const ProductGrid = () => {
+/**
+ * "Shop care" grid. The previous heading claimed "Recommended for you", which
+ * implied personalisation YAGI does not perform yet, so the neutral heading is
+ * used until Phase 2 introduces real recommendations.
+ */
+export const ProductGrid = ({ products: productOverride }) => {
     const navigate = useNavigate();
-    const { products } = useYagi();
+    const { products: catalog, catalogLoaded } = useYagi();
+    const products = productOverride || catalog;
+
+    if (catalogLoaded && products.length === 0) {
+        return (
+            <section>
+                <div className="mb-2.5 flex items-center justify-between">
+                    <h3 className="font-serif-display text-[19px] text-foreground">Shop care</h3>
+                </div>
+                <div className="glass-shell rounded-[22px]">
+                    <div className="inner-card rounded-[18px] px-5 py-8 text-center">
+                        <p className="text-[12.5px] text-muted-foreground">
+                            No products are available right now.
+                        </p>
+                    </div>
+                </div>
+            </section>
+        );
+    }
+
     return (
         <section>
             <div className="mb-2.5 flex items-center justify-between">
-                <h3 className="font-serif-display text-[19px] text-foreground">Recommended for you</h3>
+                    <h3 className="font-serif-display text-[19px] text-foreground">{productOverride ? "For your care profile" : "Shop care"}</h3>
                 <button
                     onClick={() => navigate("/shop")}
                     className="focus-ring flex items-center gap-0.5 rounded-md text-[12px] font-medium text-secondary"

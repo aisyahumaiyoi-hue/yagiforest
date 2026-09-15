@@ -4,23 +4,32 @@ const TOKEN_KEY = "yagi_token";
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const setToken = (t) => (t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY));
 
-async function request(path, { method = "GET", body, auth = true } = {}) {
-    const headers = { "Content-Type": "application/json" };
+async function request(path, { method = "GET", body, auth = true, headers: extraHeaders } = {}) {
+    const headers = { "Content-Type": "application/json", ...(extraHeaders || {}) };
     if (auth) {
         const t = getToken();
         if (t) headers.Authorization = `Bearer ${t}`;
     }
-    const res = await fetch(BASE + path, {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-    });
+    let res;
+    try {
+        res = await fetch(BASE + path, {
+            method,
+            headers,
+            body: body ? JSON.stringify(body) : undefined,
+        });
+    } catch (e) {
+        // Network failure: surface a human message, never a raw exception.
+        const err = new Error("We couldn\u2019t reach YAGI just now. Check your connection and try again.");
+        err.status = 0;
+        throw err;
+    }
     if (!res.ok) {
-        let detail = "Something went wrong.";
+        let detail = "Something went wrong. Please try again.";
         try {
             const j = await res.json();
-            detail = typeof j.detail === "string" ? j.detail : detail;
-        } catch (e) { /* noop */ }
+            if (typeof j.detail === "string") detail = j.detail;
+            else if (Array.isArray(j.detail) && j.detail[0]?.msg) detail = j.detail[0].msg;
+        } catch (e) { /* keep default */ }
         const err = new Error(detail);
         err.status = res.status;
         throw err;
@@ -96,6 +105,12 @@ export const api = {
     getOnboarding: () => request("/onboarding"),
     saveOnboarding: (body) => request("/onboarding", { method: "PUT", body }),
     recommendations: () => request("/recommendations"),
+    routineProposal: () => request("/routine/proposal"),
+    activateRoutine: (steps) => request("/routine/activate", { method: "POST", body: { steps } }),
+    careCheckins: () => request("/care/checkins"),
+    createCareCheckin: (body) => request("/care/checkins", { method: "POST", body }),
+    careSummary: () => request("/care/summary"),
+    event: (event, properties = {}) => request("/events", { method: "POST", body: { event, properties } }),
     // superadmin analytics / impact / flags / export
     saAnalytics: () => request("/superadmin/analytics"),
     saImpact: () => request("/superadmin/impact"),
@@ -104,7 +119,12 @@ export const api = {
     saExportOrders: () => request("/superadmin/export/orders"),
 };
 
-// Normalize backend product -> shape the UI already expects
+// Normalize backend product -> shape the UI already expects.
+//
+// NOTE: there is deliberately no `matchScore` / `matchReasons` here. YAGI has no
+// product-matching model, so the UI must never render a percentage fit score.
+// Products carry `designedFor` (real metadata) and `reviewStats` (derived from
+// published reviews, absent until real reviews exist).
 export const normalizeProduct = (p) => ({
     ...p,
     id: p.id,
@@ -118,12 +138,9 @@ export const normalizeProduct = (p) => ({
     price: p.price,
     unit: p.unit,
     unitPrice: p.unit_price || p.unitPrice || "",
-    rating: p.rating,
-    reviewCount: p.review_count ?? p.reviewCount ?? 0,
     images: p.images && p.images.length ? p.images : (p.image ? [p.image] : []),
     badges: p.badges || [],
-    matchScore: p.match_score ?? p.matchScore ?? 0,
-    matchReasons: p.match_reasons || p.matchReasons || [],
+    designedFor: p.designed_for || p.designedFor || [],
     ingredients: p.ingredients || [],
     routineStage: p.routine_stage || p.routineStage,
     usage: p.usage,
@@ -132,6 +149,16 @@ export const normalizeProduct = (p) => ({
     impact: p.impact,
     active: p.active,
 });
+
+/**
+ * Real review aggregate for a product, or null when there are no real reviews.
+ * Consumers must render an honest empty state (e.g. "New") rather than a rating.
+ */
+export const reviewStatsFor = (product, statsMap) => {
+    const s = (statsMap && statsMap[product?.id]) || product?.review_stats || product?.reviewStats;
+    if (!s || !s.has_reviews || !s.review_count) return null;
+    return { rating: s.rating, count: s.review_count };
+};
 
 // Normalize backend cart -> shape the UI already expects
 export const normalizeCart = (c) => ({
@@ -148,9 +175,17 @@ export const normalizeCart = (c) => ({
             name: i.product.name,
             shortName: i.product.short_name,
             images: [i.product.image],
-            matchScore: i.product.match_score,
+            designedFor: i.product.designed_for || [],
         },
     })),
     cartSubtotal: c.subtotal || 0,
     cartCount: c.count || 0,
+    droppedItems: c.dropped_items || [],
+});
+
+export const normalizeConfig = (cfg) => ({
+    ...cfg,
+    featureFlags: cfg?.feature_flags || {},
+    unavailableFlags: cfg?.unavailable_flags || [],
+    timezone: cfg?.timezone || "Asia/Jakarta",
 });

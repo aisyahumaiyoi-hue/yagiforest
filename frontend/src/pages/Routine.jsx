@@ -2,9 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-    Calendar,
-    Bell,
-    User,
     Check,
     ChevronRight,
     ScanFace,
@@ -15,6 +12,7 @@ import {
     Trash2,
     ArrowUp,
     ArrowDown,
+    User as UserIcon,
 } from "lucide-react";
 import { MobileShell } from "@/components/yagi/MobileShell";
 import { Wordmark } from "@/components/yagi/Wordmark";
@@ -22,25 +20,24 @@ import { BottomSheet } from "@/components/yagi/BottomSheet";
 import { useYagi } from "@/store/YagiContext";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
+import { businessDateKey, businessDateKeyOffset, weekdayIndex, dayOfMonth, formatBusinessLongDate } from "@/lib/datetime";
 
 const DAY_LETTERS = ["S", "M", "T", "W", "T", "F", "S"];
-const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
-// Build a 7-day week ending today, with per-day routine completion derived
-// from real activity (1 = complete, 0 = none) instead of hardcoded dates.
+/**
+ * Build the last 7 business-timezone days, ending today. Using the shared
+ * helpers keeps this aligned with the backend's Asia/Jakarta day buckets, so a
+ * check-in cannot land on the wrong column near midnight.
+ */
 const buildWeek = () => {
-    const today = new Date();
+    const todayKey = businessDateKey();
     return Array.from({ length: 7 }, (_, i) => {
-        const d = new Date(today);
-        d.setDate(today.getDate() - (6 - i));
-        return { d: DAY_LETTERS[d.getDay()], n: d.getDate(), today: i === 6 };
+        const key = businessDateKeyOffset(i - 6);
+        return { key, d: DAY_LETTERS[weekdayIndex(key)], n: dayOfMonth(key), today: key === todayKey };
     });
 };
 
-const todayLabel = () => {
-    const d = new Date();
-    return `${WEEKDAYS[d.getDay() === 0 ? 6 : d.getDay() - 1]}, ${d.getDate()} ${d.toLocaleString("en-GB", { month: "short" })}`;
-};
+const todayLabel = () => formatBusinessLongDate();
 
 const ProgressRing = ({ value, size = 44 }) => {
     const r = (size - 6) / 2;
@@ -111,12 +108,6 @@ const RoutineTask = ({ step, product, index, onToggle }) => {
                                 >
                                     {step.completed ? "Mark not done" : "Mark done"}
                                 </button>
-                                <button
-                                    onClick={() => toast("Step skipped for today")}
-                                    className="glass-control focus-ring rounded-[12px] px-4 py-2 text-[12.5px] font-medium text-secondary"
-                                >
-                                    Skip
-                                </button>
                             </div>
                         </div>
                     </motion.div>
@@ -128,9 +119,8 @@ const RoutineTask = ({ step, product, index, onToggle }) => {
 
 export default function Routine() {
     const navigate = useNavigate();
-    const { routine, toggleStep, setRoutine, getProductById, wellness, isCustomer } = useYagi();
+    const { routine, toggleStep, setRoutine, getProductById, wellness, isCustomer, isEnabled, ready, careCheckins } = useYagi();
     const [segment, setSegment] = useState("morning");
-    const [devTool, setDevTool] = useState(null);
     const [editOpen, setEditOpen] = useState(false);
     const [snapshot, setSnapshot] = useState(null);
     const [impact, setImpact] = useState(null);
@@ -149,6 +139,9 @@ export default function Routine() {
 
     const doneCount = routine.filter((s) => s.completed).length;
     const progress = routine.length ? doneCount / routine.length : 0;
+
+    const askEnabled = isEnabled("skin_agent_enabled");
+    const gamificationEnabled = isEnabled("routine_gamification_enabled");
 
     const productsInRoutine = useMemo(() => {
         const ids = [...new Set(routine.map((s) => s.productId))];
@@ -176,15 +169,13 @@ export default function Routine() {
             >
                 <div className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-b from-[hsl(46_40%_98%/0.92)] to-[hsl(46_40%_98%/0)] backdrop-blur-[6px]" />
                 <Wordmark className="flex-1" />
-                {[Calendar, Bell, User].map((Icon, i) => (
-                    <button
-                        key={i}
-                        aria-label={["Calendar", "Notifications", "Profile"][i]}
-                        className="glass-control focus-ring grid h-10 w-10 place-items-center rounded-[14px]"
-                    >
-                        <Icon className="h-[18px] w-[18px] text-primary" strokeWidth={1.9} />
-                    </button>
-                ))}
+                <button
+                    aria-label="Your profile"
+                    onClick={() => navigate("/profile")}
+                    className="glass-control focus-ring grid h-10 w-10 place-items-center rounded-[14px]"
+                >
+                    <UserIcon className="h-[18px] w-[18px] text-primary" strokeWidth={1.9} />
+                </button>
             </header>
 
             <div
@@ -212,6 +203,7 @@ export default function Routine() {
                                 </p>
                             </div>
                         </div>
+                        {careCheckins.eligibility?.eligible && <button onClick={() => navigate("/care-checkin", { state: { source: "routine" } })} className="mt-3 w-full rounded-[12px] bg-pale/70 px-3 py-2.5 text-left text-[12px] font-medium text-secondary">How is care feeling? <span className="float-right">Check in</span></button>}
 
                         {/* Segmented */}
                         <div className="segmented mt-3 flex gap-1 rounded-[14px] p-1">
@@ -250,20 +242,20 @@ export default function Routine() {
                     </div>
                 </div>
 
-                {/* Skin context */}
+                {/* Skin context — the score is engagement-based, labelled honestly */}
                 <div className="glass-shell rounded-[24px]">
                     <div className="inner-card rounded-[20px] p-4">
                         <div className="flex items-center justify-between">
-                            <p className="text-[13.5px] font-semibold text-foreground">Today’s skin context</p>
+                            <p className="text-[13.5px] font-semibold text-foreground">Today’s activity</p>
                             <span className="rounded-full bg-pale px-2.5 py-1 text-[10.5px] font-medium text-secondary">
-                                {wellness?.note || "Barrier improving"}
+                                {wellness?.note || "Getting started"}
                             </span>
                         </div>
                         <div className="mt-3 grid grid-cols-3 gap-2">
                             {[
                                 { t: "Routine", v: `${Math.round(progress * 100)}%` },
                                 { t: "Wellness", v: `${wellness?.score ?? 0}/100` },
-                                { t: "Trend", v: `${(wellness?.delta ?? 0) >= 0 ? "+" : ""}${wellness?.delta ?? 0} pts` },
+                                { t: "vs yesterday", v: `${(wellness?.delta ?? 0) >= 0 ? "+" : ""}${wellness?.delta ?? 0} pts` },
                             ].map((m) => (
                                 <div key={m.t} className="rounded-[13px] bg-pale/60 p-2.5">
                                     <p className="text-[11px] text-muted-foreground">{m.t}</p>
@@ -271,59 +263,74 @@ export default function Routine() {
                                 </div>
                             ))}
                         </div>
-                        <button
-                            onClick={() => toast("Skin progress")}
-                            className="focus-ring mt-3 inline-flex items-center gap-1 text-[12.5px] font-medium text-secondary"
-                        >
-                            View progress <ChevronRight className="h-3.5 w-3.5" strokeWidth={2} />
-                        </button>
+                        <p className="mt-2 text-[10.5px] leading-tight text-muted-foreground">
+                            {wellness?.score_definition ||
+                                "Based on your routine check-ins, purchases and recent orders — not a medical measure of your skin."}
+                        </p>
                     </div>
                 </div>
 
-                {/* Premium feature cards */}
+                {/* Capability cards. Only real, working capabilities get a working CTA. */}
                 <div className="grid grid-cols-2 gap-2.5">
-                    {[
-                        { key: "analyzer", Icon: ScanFace, title: "Skin analyzer", desc: "Understand visible changes and update your routine.", cta: "Open", live: false },
-                        { key: "agent", Icon: MessageCircle, title: "Ask YAGI", desc: "Ask about your routine, products and general eczema care.", cta: "Ask YAGI", live: true },
-                    ].map(({ key, Icon, title, desc, cta, live }) => (
-                        <div key={key} className="glass-shell rounded-[22px]">
+                    {askEnabled && (
+                        <div className="glass-shell rounded-[22px]">
                             <div className="impact-glass relative flex h-full flex-col rounded-[18px] p-3.5">
                                 <Sparkles className="absolute right-2 top-2 h-8 w-8 text-[hsl(120_40%_80%)]" strokeWidth={1.2} />
                                 <span className="grid h-9 w-9 place-items-center rounded-[12px] bg-white/70">
-                                    <Icon className="h-[18px] w-[18px] text-secondary" strokeWidth={1.9} />
+                                    <MessageCircle className="h-[18px] w-[18px] text-secondary" strokeWidth={1.9} />
                                 </span>
-                                <p className="mt-2 text-[13px] font-semibold text-foreground">{title}</p>
-                                <p className="mt-0.5 text-[10.5px] leading-tight text-muted-foreground">{desc}</p>
-                                {!live && (
-                                    <span className="mt-1.5 w-fit rounded-full bg-pale px-2 py-[2px] text-[9.5px] font-medium text-secondary">
-                                        Coming soon
-                                    </span>
-                                )}
+                                <p className="mt-2 text-[13px] font-semibold text-foreground">Ask YAGI</p>
+                                <p className="mt-0.5 text-[10.5px] leading-tight text-muted-foreground">
+                                    Ask about your routine, products and general sensitive-skin care.
+                                </p>
                                 <button
-                                    onClick={() => (live ? navigate("/ask-yagi") : setDevTool(title))}
+                                    onClick={() => navigate("/ask-yagi")}
                                     className="btn-green focus-ring mt-auto rounded-[12px] py-2 text-[12px] font-semibold"
                                 >
-                                    {cta}
+                                    Ask YAGI
                                 </button>
                             </div>
                         </div>
-                    ))}
+                    )}
+
+                    {/* Skin Analyzer is NOT built. It is shown as a clearly labelled
+                        future capability with no working CTA, and only while the
+                        server-side flag still describes it as unfinished. */}
+                    {!isEnabled("skin_analyzer_enabled") && (
+                        <div className="glass-shell rounded-[22px]">
+                            <div className="impact-glass relative flex h-full flex-col rounded-[18px] p-3.5">
+                                <Sparkles className="absolute right-2 top-2 h-8 w-8 text-[hsl(120_40%_80%)]" strokeWidth={1.2} />
+                                <span className="grid h-9 w-9 place-items-center rounded-[12px] bg-white/70">
+                                    <ScanFace className="h-[18px] w-[18px] text-secondary" strokeWidth={1.9} />
+                                </span>
+                                <p className="mt-2 text-[13px] font-semibold text-foreground">Skin Analyzer</p>
+                                <p className="mt-0.5 text-[10.5px] leading-tight text-muted-foreground">
+                                    Photo-based skin analysis is not available yet.
+                                </p>
+                                <span className="mt-1.5 w-fit rounded-full bg-pale px-2 py-[2px] text-[9.5px] font-medium text-secondary">
+                                    In development
+                                </span>
+                                <button
+                                    disabled
+                                    className="mt-auto rounded-[12px] bg-pale/70 py-2 text-[12px] font-semibold text-muted-foreground"
+                                >
+                                    Not available yet
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
-                {/* This week */}
+                {/* This week — only meaningful while gamification is on */}
+                {gamificationEnabled && (
                 <div>
                     <p className="mb-2 text-[13.5px] font-semibold text-foreground">This week</p>
                     <div className="flex justify-between gap-1">
                         {week.map((day) => {
-                            const key = (() => {
-                                const d = new Date();
-                                d.setDate(day.n);
-                                return d.toISOString().slice(0, 10);
-                            })();
-                            const rate = weekByDate[key] ?? 0;
+                            const rate = weekByDate[day.key] ?? 0;
                             return (
                                 <div
-                                    key={key}
+                                    key={day.key}
                                     className={`flex flex-1 flex-col items-center rounded-[14px] py-2 ${
                                         day.today ? "bg-gradient-to-b from-[hsl(96_58%_92%)] to-[hsl(112_40%_84%)]" : ""
                                     }`}
@@ -341,8 +348,10 @@ export default function Routine() {
                         })}
                     </div>
                 </div>
+                )}
 
                 {/* Routine progress */}
+                {gamificationEnabled && (
                 <div className="glass-shell rounded-[20px]">
                     <div className="inner-card rounded-[16px] p-4">
                         <div className="flex items-center justify-between">
@@ -360,6 +369,7 @@ export default function Routine() {
                         </p>
                     </div>
                 </div>
+                )}
 
                 {/* Products in routine */}
                 <div>
@@ -434,7 +444,7 @@ export default function Routine() {
                             ))}
                         </div>
                         <button
-                            onClick={() => toast("Impact details")}
+                            onClick={() => navigate("/impact")}
                             className="focus-ring mt-3 inline-flex items-center gap-1 text-[12.5px] font-medium text-secondary"
                         >
                             View impact details <ChevronRight className="h-3.5 w-3.5" strokeWidth={2} />
@@ -446,29 +456,6 @@ export default function Routine() {
                     </div>
                 </div>
             </div>
-
-            {/* Development modal */}
-            <BottomSheet open={!!devTool} onClose={() => setDevTool(null)} maxH="52%">
-                <div className="flex flex-col items-center pb-4 text-center">
-                    <span className="grid h-14 w-14 place-items-center rounded-[18px] bg-gradient-to-br from-[hsl(96_58%_90%)] to-[hsl(116_44%_74%)]">
-                        <Sparkles className="h-7 w-7 text-primary" strokeWidth={1.8} />
-                    </span>
-                    <h3 className="font-serif-display mt-4 text-[21px] text-foreground">We’re building this carefully.</h3>
-                    <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
-                        {devTool} is currently in development. It will help connect your routine, products and skin
-                        insights in one place.
-                    </p>
-                    <button
-                        onClick={() => setDevTool(null)}
-                        className="btn-green focus-ring mt-5 w-full rounded-[15px] py-3 text-[14px] font-semibold"
-                    >
-                        Got it
-                    </button>
-                    <button onClick={() => setDevTool(null)} className="mt-2 text-[12.5px] font-medium text-secondary">
-                        Join early access
-                    </button>
-                </div>
-            </BottomSheet>
 
             {/* Edit routine sheet */}
             <BottomSheet
@@ -488,12 +475,14 @@ export default function Routine() {
                         </button>
                         <button
                             onClick={() => {
+                                // Edits are persisted automatically as they are made,
+                                // so this button only closes the sheet.
                                 setEditOpen(false);
-                                toast("Routine saved");
+                                toast("Routine updated", { description: "Your changes are saved." });
                             }}
                             className="btn-green focus-ring flex-1 rounded-[15px] py-3 text-[14px] font-semibold"
                         >
-                            Save routine
+                            Done
                         </button>
                     </div>
                 }

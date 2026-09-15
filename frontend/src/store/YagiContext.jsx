@@ -1,16 +1,8 @@
 import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { PRODUCTS } from "@/data/products";
-import { api, getToken, setToken, normalizeCart, normalizeProduct } from "@/lib/api";
+import { api, getToken, setToken, normalizeCart, normalizeProduct, normalizeConfig } from "@/lib/api";
 
 const YagiContext = createContext(null);
-
-const DEFAULT_ROUTINE = [
-    { id: "r1", order: 1, period: "morning", stage: "Cleanse", productId: "p5", title: "Cleanse", instruction: "Massage for 30\u201360 sec", completed: true },
-    { id: "r2", order: 2, period: "morning", stage: "Moisturize", productId: "p1", title: "Moisturize", instruction: "Seal in moisture", completed: true },
-    { id: "r3", order: 3, period: "morning", stage: "Protect", productId: "p4", title: "Protect", instruction: "Light layer on dry areas", completed: false },
-    { id: "r4", order: 1, period: "evening", stage: "Treat", productId: "p2", title: "Treat", instruction: "Apply 2\u20133 drops", completed: false },
-    { id: "r5", order: 2, period: "evening", stage: "Moisturize", productId: "p3", title: "Moisturize", instruction: "Layer on very dry areas", completed: false },
-];
 
 const loadLastOrder = () => {
     try {
@@ -25,22 +17,38 @@ export const YagiProvider = ({ children }) => {
     const [identityType, setIdentityType] = useState("public"); // public | anonymous | customer
     const [user, setUser] = useState(null);
     const [products, setProducts] = useState(PRODUCTS);
+    const [reviewStats, setReviewStats] = useState({});
+    const [catalogLoaded, setCatalogLoaded] = useState(false);
     const [cartDetailed, setCartDetailed] = useState([]);
     const [cartSubtotal, setCartSubtotal] = useState(0);
     const [cartCount, setCartCount] = useState(0);
+    const [cartNotice, setCartNotice] = useState(null);
     const [saved, setSaved] = useState([]);
-    const [routine, setRoutineState] = useState(DEFAULT_ROUTINE);
+    const [routine, setRoutineState] = useState([]);
     const [wellness, setWellness] = useState(null);
     const [lastOrder, setLastOrderState] = useState(loadLastOrder);
     const [shipping, setShipping] = useState([]);
     const [config, setConfig] = useState(null);
+    const [careProfile, setCareProfile] = useState(null);
+    const [recommendations, setRecommendations] = useState([]);
+    const [careCheckins, setCareCheckins] = useState({ items: [], summary: null, eligibility: null });
     const routineInit = useRef(false);
+
+    /** Feature flags as read from the server. Unknown flags default to off so a
+     *  missing config can never accidentally reveal an unfinished capability. */
+    const isEnabled = useCallback(
+        (key) => Boolean(config?.featureFlags?.[key]),
+        [config]
+    );
 
     const applyCart = useCallback((c) => {
         const n = normalizeCart(c);
         setCartDetailed(n.cartDetailed);
         setCartSubtotal(n.cartSubtotal);
         setCartCount(n.cartCount);
+        if (n.droppedItems.length) {
+            setCartNotice(n.droppedItems);
+        }
     }, []);
 
     const ensureToken = useCallback(async () => {
@@ -52,7 +60,7 @@ export const YagiProvider = ({ children }) => {
 
     const refreshAll = useCallback(async () => {
         try {
-            const cfg = await api.config();
+            const cfg = normalizeConfig(await api.config());
             setConfig(cfg);
             if (cfg.shipping) setShipping(cfg.shipping);
         } catch (e) { /* noop */ }
@@ -63,7 +71,11 @@ export const YagiProvider = ({ children }) => {
         } catch (e) { /* noop */ }
         try {
             const r = await api.products("?limit=100");
-            if (r.items && r.items.length) setProducts(r.items.map(normalizeProduct));
+            if (r.items) {
+                setProducts(r.items.map(normalizeProduct));
+                setReviewStats(r.stats || {});
+                setCatalogLoaded(true);
+            }
         } catch (e) { /* noop */ }
         try {
             applyCart(await api.getCart());
@@ -76,17 +88,40 @@ export const YagiProvider = ({ children }) => {
             const r = await api.getRoutine();
             if (r.steps && r.steps.length) {
                 setRoutineState(r.steps);
-            } else if (!routineInit.current) {
-                routineInit.current = true;
-                await api.putRoutine(DEFAULT_ROUTINE);
-                setRoutineState(DEFAULT_ROUTINE);
             }
+        } catch (e) { /* noop */ }
+        try {
+            const profile = await api.getOnboarding();
+            setCareProfile(profile.completed ? profile : null);
+            const recs = await api.recommendations();
+            setRecommendations((recs.items || []).map((p) => ({ ...normalizeProduct(p), score: p.score, reasons: p.reasons || [] })));
         } catch (e) { /* noop */ }
         try {
             const w = await api.wellness();
             setWellness(w);
         } catch (e) { /* noop */ }
+        try { setCareCheckins(await api.careCheckins()); } catch (e) { /* noop */ }
     }, [applyCart]);
+
+    const saveCareProfile = useCallback(async (profile) => {
+        const savedProfile = await api.saveOnboarding(profile);
+        setCareProfile({ ...savedProfile, completed: true });
+        const recs = await api.recommendations();
+        setRecommendations((recs.items || []).map((p) => ({ ...normalizeProduct(p), score: p.score, reasons: p.reasons || [] })));
+        return savedProfile;
+    }, []);
+
+    const activateSuggestedRoutine = useCallback(async (steps) => {
+        const result = await api.activateRoutine(steps);
+        setRoutineState(result.steps || steps);
+        return result;
+    }, []);
+
+    const submitCareCheckin = useCallback(async (body) => {
+        const result = await api.createCareCheckin(body);
+        setCareCheckins((prev) => ({ ...prev, items: [result, ...(prev.items || []).filter((i) => i.check_in_date !== result.check_in_date)], eligibility: { eligible: false, checked_in_today: true } }));
+        return result;
+    }, []);
 
     useEffect(() => {
         (async () => {
@@ -97,6 +132,8 @@ export const YagiProvider = ({ children }) => {
     }, [ensureToken, refreshAll]);
 
     // ---- cart ----
+    // Errors propagate to the caller so the UI can show a real message instead
+    // of silently appearing to have worked.
     const addToCart = useCallback(async (productId, variantId, qty = 1) => {
         applyCart(await api.addItem(productId, variantId, qty));
     }, [applyCart]);
@@ -106,6 +143,7 @@ export const YagiProvider = ({ children }) => {
     const removeFromCart = useCallback(async (productId, variantId) => {
         applyCart(await api.removeItem(productId, variantId));
     }, [applyCart]);
+    const clearCartNotice = useCallback(() => setCartNotice(null), []);
 
     // ---- favorites ----
     const toggleSaved = useCallback(async (productId) => {
@@ -169,7 +207,7 @@ export const YagiProvider = ({ children }) => {
         setUser(null);
         setIdentityType("public");
         routineInit.current = false;
-        setRoutineState(DEFAULT_ROUTINE);
+        setRoutineState([]);
         await ensureToken();
         await refreshAll();
     }, [ensureToken, refreshAll]);
@@ -181,8 +219,19 @@ export const YagiProvider = ({ children }) => {
         } catch { /* noop */ }
     }, []);
 
+    // One key per checkout session: re-submitting the same attempt returns the
+    // order that already exists instead of creating a second one.
+    const orderKeyRef = useRef(null);
+    const resetOrderKey = useCallback(() => { orderKeyRef.current = null; }, []);
+
     const placeOrder = useCallback(async (details) => {
-        const order = await api.placeOrder(details);
+        if (!orderKeyRef.current) {
+            orderKeyRef.current =
+                (globalThis.crypto?.randomUUID?.() ||
+                    `ord_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+        }
+        const order = await api.placeOrder({ ...details, idempotency_key: orderKeyRef.current });
+        orderKeyRef.current = null;
         setLastOrder(order);
         applyCart(await api.getCart());
         return order;
@@ -194,6 +243,7 @@ export const YagiProvider = ({ children }) => {
     const value = useMemo(() => ({
         ready,
         products,
+        catalogLoaded,
         // identity
         identityType,
         isCustomer: identityType === "customer",
@@ -205,6 +255,8 @@ export const YagiProvider = ({ children }) => {
         cartDetailed,
         cartSubtotal,
         cartCount,
+        cartNotice,
+        clearCartNotice,
         addToCart,
         updateQty,
         removeFromCart,
@@ -213,24 +265,37 @@ export const YagiProvider = ({ children }) => {
         toggleSaved,
         isSaved: (id) => saved.includes(id),
         // routine
-        routine,
+         routine,
         toggleStep,
         addToRoutine,
-        setRoutine,
+         setRoutine,
+         careProfile,
+         recommendations,
+         saveCareProfile,
+         activateSuggestedRoutine,
+         careCheckins,
+         submitCareCheckin,
         // wellness
         wellness,
+        // reviews
+        reviewStats,
+        getReviewStats: (product) => reviewStats[product?.id] || null,
         // orders
         lastOrder,
         setLastOrder,
         placeOrder,
+        resetOrderKey,
         getProductById,
         getProductBySlug,
-        // config / shipping
+        // config / shipping / flags
         config,
         shipping,
-    }), [ready, products, identityType, user, login, register, logout, cartDetailed, cartSubtotal, cartCount,
-         addToCart, updateQty, removeFromCart, saved, toggleSaved, routine, toggleStep, addToRoutine,
-         setRoutine, wellness, lastOrder, setLastOrder, placeOrder, getProductById, getProductBySlug, config, shipping]);
+        isEnabled,
+        timezone: config?.timezone || "Asia/Jakarta",
+    }), [ready, products, catalogLoaded, identityType, user, login, register, logout, cartDetailed, cartSubtotal,
+         cartCount, cartNotice, clearCartNotice, addToCart, updateQty, removeFromCart, saved, toggleSaved, routine,
+          toggleStep, addToRoutine, setRoutine, careProfile, recommendations, saveCareProfile, activateSuggestedRoutine, careCheckins, submitCareCheckin, wellness, reviewStats, lastOrder, setLastOrder, placeOrder,
+         resetOrderKey, getProductById, getProductBySlug, config, shipping, isEnabled]);
 
     return <YagiContext.Provider value={value}>{children}</YagiContext.Provider>;
 };

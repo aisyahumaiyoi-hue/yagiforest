@@ -70,12 +70,14 @@ export const AwardProof = ({ onLearn }) => (
                     Recognized through ASEAN’s social enterprise ecosystem.
                 </p>
             </div>
-            <button
-                onClick={onLearn}
-                className="focus-ring shrink-0 rounded-md text-[11.5px] font-medium text-secondary"
-            >
-                Learn why
-            </button>
+            {onLearn && (
+                <button
+                    onClick={onLearn}
+                    className="focus-ring shrink-0 rounded-md text-[11.5px] font-medium text-secondary"
+                >
+                    Learn why
+                </button>
+            )}
         </div>
     </div>
 );

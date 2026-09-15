@@ -1,6 +1,6 @@
-import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Minus, Plus, Heart, Sparkles, Leaf, Users, Package, Lock, ChevronDown, ShoppingBag } from "lucide-react";
+import { Minus, Plus, Heart, Leaf, Users, Package, Lock, ShoppingBag, AlertCircle } from "lucide-react";
+import { toast } from "sonner";
 import { MobileShell } from "@/components/yagi/MobileShell";
 import { TopBar } from "@/components/yagi/TopBar";
 import { ShopProductCard } from "@/components/yagi/ShopProductCard";
@@ -9,12 +9,22 @@ import { formatIDR } from "@/lib/format";
 
 export default function Cart() {
     const navigate = useNavigate();
-    const { cartDetailed, cartSubtotal, updateQty, removeFromCart, toggleSaved, products, shipping } = useYagi();
-    const [promoOpen, setPromoOpen] = useState(false);
+    const {
+        cartDetailed, cartSubtotal, updateQty, removeFromCart, toggleSaved, products, shipping,
+        cartNotice, clearCartNotice,
+    } = useYagi();
 
     const delivery = (shipping || []).find((s) => s.id === "regular")?.price ?? 18000;
     const total = cartSubtotal ? cartSubtotal + delivery : 0;
     const recs = products.filter((p) => !cartDetailed.some((c) => c.productId === p.id)).slice(0, 2);
+
+    const changeQty = async (productId, variantId, delta) => {
+        try {
+            await updateQty(productId, variantId, delta);
+        } catch (e) {
+            toast("Couldn\u2019t update your bag", { description: e.message });
+        }
+    };
 
     if (cartDetailed.length === 0) {
         return (
@@ -52,15 +62,31 @@ export default function Cart() {
                         Checkout · {formatIDR(total)}
                     </button>
                     <p className="mt-2 flex items-center justify-center gap-1 text-[11px] text-muted-foreground">
-                        <Lock className="h-3 w-3" strokeWidth={2} /> Secure checkout
+                        <Lock className="h-3 w-3" strokeWidth={2} /> Payment by manual bank transfer
                     </p>
                 </div>
             }
         >
-            <TopBar title="Your bag" subtitle={`${cartDetailed.length} items`} />
+            <TopBar title="Your bag" subtitle={`${cartDetailed.length} item${cartDetailed.length === 1 ? "" : "s"}`} />
 
             <div className="flex flex-col gap-3 px-4 pt-1 pb-44">
-                {/* Items */}
+                {/* Items that could not be priced are reported, never silently dropped */}
+                {cartNotice?.length > 0 && (
+                    <button
+                        onClick={clearCartNotice}
+                        className="glass-shell focus-ring w-full rounded-[16px] text-left"
+                    >
+                        <div className="inner-card flex items-start gap-2 rounded-[13px] p-3">
+                            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[hsl(30_70%_45%)]" strokeWidth={2} />
+                            <p className="text-[11.5px] leading-snug text-muted-foreground">
+                                {cartNotice.length} item{cartNotice.length === 1 ? "" : "s"} in your bag{" "}
+                                {cartNotice.length === 1 ? "is" : "are"} no longer available and{" "}
+                                {cartNotice.length === 1 ? "was" : "were"} removed. Tap to dismiss.
+                            </p>
+                        </div>
+                    </button>
+                )}
+
                 {cartDetailed.map((item) => (
                     <div key={item.productId + item.variantId} className="glass-shell rounded-[22px]">
                         <div className="inner-card flex gap-3 rounded-[18px] p-3">
@@ -81,9 +107,9 @@ export default function Cart() {
                                         <Heart className="h-[17px] w-[17px]" strokeWidth={1.9} />
                                     </button>
                                 </div>
-                                {item.product.matchScore >= 88 && (
-                                    <p className="mt-0.5 inline-flex items-center gap-1 text-[10.5px] text-secondary">
-                                        <Sparkles className="h-3 w-3" strokeWidth={2} /> Part of your recommended routine
+                                {item.product.designedFor?.length > 0 && (
+                                    <p className="mt-0.5 text-[10.5px] text-secondary">
+                                        For {item.product.designedFor.slice(0, 2).join(" · ").toLowerCase()}
                                     </p>
                                 )}
                                 <div className="mt-auto flex items-center justify-between pt-2">
@@ -91,7 +117,7 @@ export default function Cart() {
                                     <div className="quantity-control flex items-center gap-1 rounded-[12px] px-1 py-1">
                                         <button
                                             aria-label="Decrease"
-                                            onClick={() => updateQty(item.productId, item.variantId, -1)}
+                                            onClick={() => changeQty(item.productId, item.variantId, -1)}
                                             className="grid h-7 w-7 place-items-center rounded-[9px] text-secondary active:scale-90"
                                         >
                                             <Minus className="h-3.5 w-3.5" strokeWidth={2.2} />
@@ -99,7 +125,7 @@ export default function Cart() {
                                         <span className="w-5 text-center text-[13px] font-semibold text-foreground">{item.qty}</span>
                                         <button
                                             aria-label="Increase"
-                                            onClick={() => updateQty(item.productId, item.variantId, 1)}
+                                            onClick={() => changeQty(item.productId, item.variantId, 1)}
                                             className="grid h-7 w-7 place-items-center rounded-[9px] text-secondary active:scale-90"
                                         >
                                             <Plus className="h-3.5 w-3.5" strokeWidth={2.2} />
@@ -107,7 +133,13 @@ export default function Cart() {
                                     </div>
                                 </div>
                                 <button
-                                    onClick={() => removeFromCart(item.productId, item.variantId)}
+                                    onClick={async () => {
+                                        try {
+                                            await removeFromCart(item.productId, item.variantId);
+                                        } catch (e) {
+                                            toast("Couldn\u2019t remove that item", { description: e.message });
+                                        }
+                                    }}
                                     className="mt-1.5 self-start text-[11px] font-medium text-muted-foreground underline underline-offset-2"
                                 >
                                     Remove
@@ -146,35 +178,19 @@ export default function Cart() {
                                 </div>
                             ))}
                         </div>
-                        <p className="mt-2 text-[10px] text-muted-foreground">Impact is calculated from your lower-waste items at checkout</p>
+                        <p className="mt-2 text-[10px] text-muted-foreground">
+                            Impact is recorded to your ledger from your lower-waste items when the order is placed
+                        </p>
                     </div>
                 </div>
 
-                {/* Promo */}
-                <button
-                    onClick={() => setPromoOpen((o) => !o)}
-                    className="glass-control focus-ring flex items-center justify-between rounded-[14px] px-4 py-3 text-[13px] font-medium text-secondary"
-                >
-                    Have a voucher?
-                    <ChevronDown className={`h-4 w-4 transition-transform ${promoOpen ? "rotate-180" : ""}`} strokeWidth={2} />
-                </button>
-                {promoOpen && (
-                    <div className="flex gap-2">
-                        <input
-                            placeholder="Enter voucher code"
-                            className="checkout-field flex-1 rounded-[13px] px-3.5 py-2.5 text-[13px] outline-none"
-                        />
-                        <button className="glass-control rounded-[13px] px-4 text-[13px] font-semibold text-secondary">Apply</button>
-                    </div>
-                )}
-
-                {/* Summary */}
+                {/* Summary. The voucher input was removed: no redemption flow exists
+                    and applying a code did nothing. Voucher codes are issued in Rewards. */}
                 <div className="glass-shell rounded-[22px]">
                     <div className="inner-card rounded-[18px] p-4">
                         {[
                             ["Subtotal", formatIDR(cartSubtotal)],
                             ["Delivery", formatIDR(delivery)],
-                            ["Discount", "—"],
                         ].map(([k, v]) => (
                             <div key={k} className="flex justify-between py-1 text-[13px]">
                                 <span className="text-muted-foreground">{k}</span>

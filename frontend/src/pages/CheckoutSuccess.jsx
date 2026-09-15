@@ -7,6 +7,13 @@ import { useYagi } from "@/store/YagiContext";
 import { formatIDR } from "@/lib/format";
 import { toast } from "sonner";
 
+/**
+ * Post-order screen.
+ *
+ * IMPORTANT: this page appears immediately after the order row is created and
+ * before any money has been received. It must never imply the order is paid or
+ * dispatched — manual bank transfer is only confirmed after admin verification.
+ */
 export default function CheckoutSuccess() {
     const navigate = useNavigate();
     const { lastOrder, addToRoutine, getProductById } = useYagi();
@@ -22,13 +29,15 @@ export default function CheckoutSuccess() {
         .map((i) => getProductById(i.product_id))
         .filter(Boolean);
 
-    const copyNumber = () => {
+    const copyNumber = async () => {
         try {
-            navigator.clipboard?.writeText((bank.account_number || "").replace(/\s/g, ""));
-        } catch { /* noop */ }
-        setCopied(true);
-        toast("Account number copied");
-        setTimeout(() => setCopied(false), 1500);
+            await navigator.clipboard.writeText((bank.account_number || "").replace(/\s/g, ""));
+            setCopied(true);
+            toast("Account number copied");
+            setTimeout(() => setCopied(false), 1500);
+        } catch {
+            toast("Couldn\u2019t copy automatically", { description: bank.account_number });
+        }
     };
 
     return (
@@ -52,10 +61,12 @@ export default function CheckoutSuccess() {
                 </div>
 
                 <h1 className="font-serif-display mt-6 text-[26px] leading-tight text-foreground">
-                    Your care is on its way.
+                    Your order is created.
                 </h1>
                 <p className="mt-2 text-[13px] text-muted-foreground">Order #{lastOrder.order_number}</p>
-                <p className="text-[13px] text-muted-foreground">Expected {lastOrder.shipping_eta}</p>
+                <p className="mt-1 inline-flex items-center rounded-full bg-pale px-3 py-1 text-[11.5px] font-medium text-secondary">
+                    Awaiting transfer
+                </p>
 
                 {/* Bank transfer instructions */}
                 <div className="glass-shell mt-6 w-full rounded-[24px] text-left">
@@ -80,14 +91,16 @@ export default function CheckoutSuccess() {
                             </div>
                         </div>
                         <p className="mt-2 text-[11px] text-muted-foreground">
-                            Your order confirms automatically once we receive your transfer.
+                            Your order stays <span className="font-medium text-foreground">awaiting transfer</span> until you
+                            send the amount above. After you upload your transfer proof, our team verifies it and the order
+                            becomes <span className="font-medium text-foreground">payment confirmed</span>.
                         </p>
                     </div>
                 </div>
 
                 <div className="mt-4 flex w-full flex-col gap-2.5">
                     <button onClick={() => navigate("/profile/orders")} className="btn-green focus-ring w-full rounded-[16px] py-3.5 text-[15px] font-semibold">
-                        Track order
+                        Upload transfer proof
                     </button>
                     <button onClick={() => navigate("/")} className="glass-control focus-ring w-full rounded-[16px] py-3.5 text-[14px] font-medium text-secondary">
                         Back home
@@ -102,7 +115,7 @@ export default function CheckoutSuccess() {
                             <span className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-[hsl(96_58%_88%)] to-[hsl(116_44%_72%)] text-[13px] font-bold text-primary">+</span>
                             <div className="flex-1">
                                 <p className="text-[13px] font-semibold text-foreground">+{lastOrder.points_earned} YAGI Points pending</p>
-                                <p className="text-[10.5px] text-muted-foreground">Available after your order is confirmed.</p>
+                                <p className="text-[10.5px] text-muted-foreground">Added once our team confirms your transfer.</p>
                             </div>
                         </div>
                         <div className="mt-3 grid grid-cols-3 gap-2">

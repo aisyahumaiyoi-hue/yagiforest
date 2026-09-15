@@ -1,22 +1,34 @@
 import { useNavigate } from "react-router-dom";
 import { Heart, Plus, Sparkles, Leaf, Check } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { useYagi } from "@/store/YagiContext";
 import { formatIDR } from "@/lib/format";
-import { Stars } from "./Stars";
+import { RatingSummary } from "./Stars";
 
 export const ShopProductCard = ({ product, onWhyFits }) => {
     const navigate = useNavigate();
-    const { toggleSaved, isSaved, addToCart } = useYagi();
+    const { toggleSaved, isSaved, addToCart, getReviewStats, careProfile } = useYagi();
     const saved = isSaved(product.id);
     const [added, setAdded] = useState(false);
+    const [busy, setBusy] = useState(false);
     const primaryBadge = product.badges?.[0];
+    const stats = getReviewStats(product);
+    const designedFor = (product.designedFor || []).slice(0, 2);
 
-    const handleAdd = (e) => {
+    const handleAdd = async (e) => {
         e.stopPropagation();
-        addToCart(product.id, product.variants?.[0]?.id, 1);
-        setAdded(true);
-        setTimeout(() => setAdded(false), 1000);
+        if (busy) return; // guard against double submit
+        setBusy(true);
+        try {
+            await addToCart(product.id, product.variants?.[0]?.id, 1);
+            setAdded(true);
+            setTimeout(() => setAdded(false), 1000);
+        } catch (err) {
+            toast("Couldn\u2019t add to bag", { description: err.message });
+        } finally {
+            setBusy(false);
+        }
     };
 
     return (
@@ -51,20 +63,23 @@ export const ShopProductCard = ({ product, onWhyFits }) => {
                             strokeWidth={1.9}
                         />
                     </button>
-                    {product.matchScore >= 90 && (
-                        <span className="heart-chip absolute bottom-2 left-2 inline-flex items-center gap-1 rounded-full px-2 py-[3px] text-[9.5px] font-semibold text-secondary">
-                            <Sparkles className="h-3 w-3" strokeWidth={2} />
-                            {product.matchScore}% match
-                        </span>
-                    )}
                 </div>
 
                 <div className="flex flex-1 flex-col p-3">
                     <p className="text-[13.5px] font-semibold leading-tight text-foreground">{product.name}</p>
                     <p className="mt-0.5 line-clamp-1 text-[11px] text-muted-foreground">{product.purpose}</p>
                     <div className="mt-1.5">
-                        <Stars rating={product.rating} count={product.reviewCount} />
+                        <RatingSummary stats={stats} />
                     </div>
+
+                    {careProfile && product.reasons?.[0]?.label && <p className="mt-1.5 text-[10.5px] text-secondary">{product.reasons[0].label}</p>}
+                    {/* Real product metadata instead of an invented match score. */}
+                    {designedFor.length > 0 && (
+                        <p className="mt-1.5 inline-flex flex-wrap items-center gap-1 text-[10.5px] text-secondary">
+                            <Sparkles className="h-3 w-3 shrink-0" strokeWidth={2} />
+                            For {designedFor.join(" · ").toLowerCase()}
+                        </p>
+                    )}
 
                     {onWhyFits && (
                         <button
@@ -90,7 +105,8 @@ export const ShopProductCard = ({ product, onWhyFits }) => {
                             <button
                                 aria-label={`Add ${product.name} to bag`}
                                 onClick={handleAdd}
-                                className="product-add focus-ring grid h-[34px] w-[34px] place-items-center rounded-[12px]"
+                                disabled={busy}
+                                className="product-add focus-ring grid h-[34px] w-[34px] place-items-center rounded-[12px] disabled:opacity-60"
                             >
                                 {added ? (
                                     <Check className="h-[18px] w-[18px]" strokeWidth={2.4} />
