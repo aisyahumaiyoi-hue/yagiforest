@@ -266,7 +266,7 @@ export default function Shop() {
                             ))}
                         </div>
 
-                        <ImpactCard onMethodology={() => toast("Impact methodology", { description: "Sample data — replace with verified YAGI metrics." })} />
+                        <ImpactCard onMethodology={() => toast("Impact methodology", { description: "Estimated from refill vs. single-use packaging mass." })} />
 
                         <div className="grid grid-cols-2 gap-2.5">
                             {filtered.slice(4).map((p) => (

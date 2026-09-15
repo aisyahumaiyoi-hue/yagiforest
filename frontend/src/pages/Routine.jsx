@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -20,18 +20,27 @@ import { MobileShell } from "@/components/yagi/MobileShell";
 import { Wordmark } from "@/components/yagi/Wordmark";
 import { BottomSheet } from "@/components/yagi/BottomSheet";
 import { useYagi } from "@/store/YagiContext";
-import { getProductById, USER_IMPACT } from "@/data/products";
+import { api } from "@/lib/api";
 import { toast } from "sonner";
 
-const WEEK = [
-    { d: "M", n: 17, done: 1 },
-    { d: "T", n: 18, done: 0.8 },
-    { d: "W", n: 19, done: 1 },
-    { d: "T", n: 20, done: 0.4, today: true },
-    { d: "F", n: 21, done: 0 },
-    { d: "S", n: 22, done: 0 },
-    { d: "S", n: 23, done: 0 },
-];
+const DAY_LETTERS = ["S", "M", "T", "W", "T", "F", "S"];
+const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+// Build a 7-day week ending today, with per-day routine completion derived
+// from real activity (1 = complete, 0 = none) instead of hardcoded dates.
+const buildWeek = () => {
+    const today = new Date();
+    return Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(today);
+        d.setDate(today.getDate() - (6 - i));
+        return { d: DAY_LETTERS[d.getDay()], n: d.getDate(), today: i === 6 };
+    });
+};
+
+const todayLabel = () => {
+    const d = new Date();
+    return `${WEEKDAYS[d.getDay() === 0 ? 6 : d.getDay() - 1]}, ${d.getDate()} ${d.toLocaleString("en-GB", { month: "short" })}`;
+};
 
 const ProgressRing = ({ value, size = 44 }) => {
     const r = (size - 6) / 2;
@@ -119,11 +128,20 @@ const RoutineTask = ({ step, product, index, onToggle }) => {
 
 export default function Routine() {
     const navigate = useNavigate();
-    const { routine, toggleStep, setRoutine } = useYagi();
+    const { routine, toggleStep, setRoutine, getProductById, wellness, isCustomer } = useYagi();
     const [segment, setSegment] = useState("morning");
     const [devTool, setDevTool] = useState(null);
     const [editOpen, setEditOpen] = useState(false);
     const [snapshot, setSnapshot] = useState(null);
+    const [impact, setImpact] = useState(null);
+
+    useEffect(() => {
+        if (isCustomer) api.impact().then(setImpact).catch(() => setImpact(null));
+    }, [isCustomer]);
+
+    const week = buildWeek();
+    const routineSeries = wellness?.series || [];
+    const weekByDate = Object.fromEntries(routineSeries.map((d) => [d.date, d.routine]));
 
     const morning = routine.filter((s) => s.period === "morning").sort((a, b) => a.order - b.order);
     const evening = routine.filter((s) => s.period === "evening").sort((a, b) => a.order - b.order);
@@ -135,7 +153,7 @@ export default function Routine() {
     const productsInRoutine = useMemo(() => {
         const ids = [...new Set(routine.map((s) => s.productId))];
         return ids.map((id) => getProductById(id)).filter(Boolean);
-    }, [routine]);
+    }, [routine, getProductById]);
 
     const move = (id, dir) => {
         setRoutine((prev) => {
@@ -174,7 +192,7 @@ export default function Routine() {
                 style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 120px)" }}
             >
                 <div className="pt-1">
-                    <p className="text-[11.5px] font-medium text-secondary">Thursday, 20 Aug</p>
+                    <p className="text-[11.5px] font-medium text-secondary">{todayLabel()}</p>
                     <h1 className="font-serif-display text-[24px] leading-tight text-foreground">Your skin routine</h1>
                     <p className="mt-0.5 text-[13px] text-muted-foreground">A simple plan built around your skin.</p>
                 </div>
@@ -238,14 +256,14 @@ export default function Routine() {
                         <div className="flex items-center justify-between">
                             <p className="text-[13.5px] font-semibold text-foreground">Today’s skin context</p>
                             <span className="rounded-full bg-pale px-2.5 py-1 text-[10.5px] font-medium text-secondary">
-                                Barrier improving
+                                {wellness?.note || "Barrier improving"}
                             </span>
                         </div>
                         <div className="mt-3 grid grid-cols-3 gap-2">
                             {[
-                                { t: "Hydration", v: "Good" },
-                                { t: "Redness", v: "Low" },
-                                { t: "Comfort", v: "High" },
+                                { t: "Routine", v: `${Math.round(progress * 100)}%` },
+                                { t: "Wellness", v: `${wellness?.score ?? 0}/100` },
+                                { t: "Trend", v: `${(wellness?.delta ?? 0) >= 0 ? "+" : ""}${wellness?.delta ?? 0} pts` },
                             ].map((m) => (
                                 <div key={m.t} className="rounded-[13px] bg-pale/60 p-2.5">
                                     <p className="text-[11px] text-muted-foreground">{m.t}</p>
@@ -296,23 +314,31 @@ export default function Routine() {
                 <div>
                     <p className="mb-2 text-[13.5px] font-semibold text-foreground">This week</p>
                     <div className="flex justify-between gap-1">
-                        {WEEK.map((day) => (
-                            <div
-                                key={day.n}
-                                className={`flex flex-1 flex-col items-center rounded-[14px] py-2 ${
-                                    day.today ? "bg-gradient-to-b from-[hsl(96_58%_92%)] to-[hsl(112_40%_84%)]" : ""
-                                }`}
-                            >
-                                <span className="text-[10px] text-muted-foreground">{day.d}</span>
-                                <span className={`text-[13px] font-semibold ${day.today ? "text-primary" : "text-foreground"}`}>
-                                    {day.n}
-                                </span>
-                                <span
-                                    className="mt-1 h-1.5 w-1.5 rounded-full"
-                                    style={{ background: day.done >= 1 ? "hsl(120 48% 46%)" : day.done > 0 ? "hsl(96 45% 62%)" : "hsl(140 15% 82%)" }}
-                                />
-                            </div>
-                        ))}
+                        {week.map((day) => {
+                            const key = (() => {
+                                const d = new Date();
+                                d.setDate(day.n);
+                                return d.toISOString().slice(0, 10);
+                            })();
+                            const rate = weekByDate[key] ?? 0;
+                            return (
+                                <div
+                                    key={key}
+                                    className={`flex flex-1 flex-col items-center rounded-[14px] py-2 ${
+                                        day.today ? "bg-gradient-to-b from-[hsl(96_58%_92%)] to-[hsl(112_40%_84%)]" : ""
+                                    }`}
+                                >
+                                    <span className="text-[10px] text-muted-foreground">{day.d}</span>
+                                    <span className={`text-[13px] font-semibold ${day.today ? "text-primary" : "text-foreground"}`}>
+                                        {day.n}
+                                    </span>
+                                    <span
+                                        className="mt-1 h-1.5 w-1.5 rounded-full"
+                                        style={{ background: rate >= 100 ? "hsl(120 48% 46%)" : rate > 0 ? "hsl(96 45% 62%)" : "hsl(140 15% 82%)" }}
+                                    />
+                                </div>
+                            );
+                        })}
                     </div>
                 </div>
 
@@ -321,12 +347,12 @@ export default function Routine() {
                     <div className="inner-card rounded-[16px] p-4">
                         <div className="flex items-center justify-between">
                             <p className="text-[13px] font-semibold text-foreground">Routine progress</p>
-                            <span className="text-[13px] font-semibold text-primary">{USER_IMPACT.weeklyRoutine}%</span>
+                            <span className="text-[13px] font-semibold text-primary">{Math.round(progress * 100)}%</span>
                         </div>
                         <div className="mt-2 h-2 overflow-hidden rounded-full bg-pale">
                             <div
                                 className="h-full rounded-full bg-gradient-to-r from-[hsl(96_55%_66%)] to-[hsl(120_45%_50%)]"
-                                style={{ width: `${USER_IMPACT.weeklyRoutine}%` }}
+                                style={{ width: `${Math.round(progress * 100)}%` }}
                             />
                         </div>
                         <p className="mt-1.5 text-[11px] text-muted-foreground">
@@ -339,9 +365,7 @@ export default function Routine() {
                 <div>
                     <p className="mb-2 text-[13.5px] font-semibold text-foreground">Products in your routine</p>
                     <div className="no-scrollbar -mx-4 flex gap-2.5 overflow-x-auto px-4">
-                        {productsInRoutine.map((p, i) => {
-                            const daysLeft = [12, 8, 20, 15][i % 4];
-                            const low = daysLeft <= 8;
+                        {productsInRoutine.map((p) => {
                             return (
                                 <div key={p.id} className="glass-shell w-[150px] shrink-0 rounded-[20px]">
                                     <div className="inner-card overflow-hidden rounded-[16px]">
@@ -350,8 +374,8 @@ export default function Routine() {
                                         </div>
                                         <div className="p-2.5">
                                             <p className="truncate text-[12px] font-semibold text-foreground">{p.shortName}</p>
-                                            <p className={`text-[10.5px] ${low ? "text-[hsl(38_60%_45%)]" : "text-muted-foreground"}`}>
-                                                About {daysLeft} days left
+                                            <p className="text-[10.5px] text-muted-foreground">
+                                                {p.unit} · {p.unitPrice}
                                             </p>
                                             <button
                                                 onClick={() => navigate(`/product/${p.slug}`)}
@@ -398,10 +422,10 @@ export default function Routine() {
                         <p className="text-[13.5px] font-semibold text-foreground">Your care impact</p>
                         <div className="mt-3 grid grid-cols-2 gap-2">
                             {[
-                                { t: "Refills used", v: "4" },
-                                { t: "Packaging avoided", v: `${USER_IMPACT.plasticAvoided} bottles` },
-                                { t: "Responsible purchases", v: `${USER_IMPACT.purchases}` },
-                                { t: "Local impact", v: `${USER_IMPACT.localNetworks} network` },
+                                { t: "Refills used", v: `${impact?.lower_waste_units ?? 0}` },
+                                { t: "Packaging avoided", v: `${impact?.plastic_bottles_avoided ?? 0} bottles` },
+                                { t: "Responsible purchases", v: `${impact?.orders ?? 0}` },
+                                { t: "Local impact", v: `${impact?.local_producers_supported ?? 0} partner` },
                             ].map((m) => (
                                 <div key={m.t} className="inner-card rounded-[13px] p-3">
                                     <p className="text-[15px] font-semibold text-primary">{m.v}</p>

@@ -1,4 +1,4 @@
-const IMG = {
+export const IMG = {
     moisturizer:
         "https://static.prod-images.emergentagent.com/jobs/cdf9bc84-3f03-4479-bb9d-15a09cf3bba4/images/87d1377bc3e6763e2767a7c0fbdc3e01bf6720d7fa00f34a9091f0c9c11f97c7.jpeg",
     serum:
@@ -17,8 +17,8 @@ export const HERO_IMAGE =
 export const IMPACT_BG =
     "https://static.prod-images.emergentagent.com/jobs/cdf9bc84-3f03-4479-bb9d-15a09cf3bba4/images/4f53d5da2026d671556c67bbae3039877b57c6f6988da7ddef3c71356aefce44.jpeg";
 
-// NOTE: impact figures below are SAMPLE/PLACEHOLDER mock data.
-// Replace with verified YAGI impact metrics when available.
+// NOTE: this file is a client-side loading fallback. The server catalog
+// (/api/products) is authoritative and overrides these values on load.
 export const PRODUCTS = [
     {
         id: "p1",
@@ -298,11 +298,3 @@ export const CATEGORIES = [
     "Baby care",
     "Bundles",
 ];
-
-// Sample cumulative user impact (PLACEHOLDER data)
-export const USER_IMPACT = {
-    purchases: 3,
-    plasticAvoided: 2,
-    localNetworks: 1,
-    weeklyRoutine: 82,
-};

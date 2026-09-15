@@ -78,7 +78,60 @@ export const api = {
     saApprove: (order_number) => request("/superadmin/orders/approve", { method: "POST", body: { order_number } }),
     saReject: (order_number, reason) => request("/superadmin/orders/reject", { method: "POST", body: { order_number, reason } }),
     saAiTest: (message) => request("/superadmin/ai-test", { method: "POST", body: { message } }),
+    saProducts: () => request("/superadmin/products"),
+    saCreateProduct: (body) => request("/superadmin/products", { method: "POST", body }),
+    saUpdateProduct: (id, body) => request(`/superadmin/products/${id}`, { method: "PUT", body }),
+    saDeleteProduct: (id) => request(`/superadmin/products/${id}`, { method: "DELETE" }),
+    saUsers: () => request("/superadmin/users"),
+    saSetUserRole: (id, role) => request(`/superadmin/users/${id}/role`, { method: "PATCH", body: { role } }),
+    // impact
+    impact: () => request("/impact"),
+    impactMethodology: () => request("/impact/methodology", { auth: false }),
+    // wellness
+    wellness: () => request("/wellness"),
+    // reviews
+    createReview: (body) => request("/reviews", { method: "POST", body }),
+    productReviews: (product_id) => request(`/reviews/product/${product_id}`, { auth: false }),
+    // onboarding & recommendations
+    getOnboarding: () => request("/onboarding"),
+    saveOnboarding: (body) => request("/onboarding", { method: "PUT", body }),
+    recommendations: () => request("/recommendations"),
+    // superadmin analytics / impact / flags / export
+    saAnalytics: () => request("/superadmin/analytics"),
+    saImpact: () => request("/superadmin/impact"),
+    saFlags: () => request("/superadmin/flags"),
+    saSetFlags: (flags) => request("/superadmin/flags", { method: "PUT", body: { flags } }),
+    saExportOrders: () => request("/superadmin/export/orders"),
 };
+
+// Normalize backend product -> shape the UI already expects
+export const normalizeProduct = (p) => ({
+    ...p,
+    id: p.id,
+    slug: p.slug,
+    name: p.name,
+    shortName: p.short_name || p.shortName || p.name,
+    category: p.category,
+    skinConcerns: p.skin_concerns || p.skinConcerns || [],
+    purpose: p.purpose,
+    description: p.description || p.purpose || "",
+    price: p.price,
+    unit: p.unit,
+    unitPrice: p.unit_price || p.unitPrice || "",
+    rating: p.rating,
+    reviewCount: p.review_count ?? p.reviewCount ?? 0,
+    images: p.images && p.images.length ? p.images : (p.image ? [p.image] : []),
+    badges: p.badges || [],
+    matchScore: p.match_score ?? p.matchScore ?? 0,
+    matchReasons: p.match_reasons || p.matchReasons || [],
+    ingredients: p.ingredients || [],
+    routineStage: p.routine_stage || p.routineStage,
+    usage: p.usage,
+    certifications: p.certifications || [],
+    variants: p.variants || [],
+    impact: p.impact,
+    active: p.active,
+});
 
 // Normalize backend cart -> shape the UI already expects
 export const normalizeCart = (c) => ({

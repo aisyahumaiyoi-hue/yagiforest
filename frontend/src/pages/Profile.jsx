@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { User, Package, Gift, Heart, MapPin, Leaf, HelpCircle, Settings, ChevronRight, LogOut, Sparkles } from "lucide-react";
+import { User, Package, Gift, Heart, MapPin, Leaf, HelpCircle, Settings, ChevronRight, LogOut, Sparkles, LayoutDashboard } from "lucide-react";
 import { MobileShell } from "@/components/yagi/MobileShell";
 import { Wordmark } from "@/components/yagi/Wordmark";
 import { useYagi } from "@/store/YagiContext";
@@ -12,7 +12,7 @@ const SECTIONS = [
     ["Rewards", Gift, "/rewards"],
     ["Saved products", Heart, "/shop"],
     ["Addresses", MapPin, null],
-    ["My impact", Leaf, "/rewards"],
+    ["My impact", Leaf, "/impact"],
     ["Help", HelpCircle, null],
     ["Settings", Settings, null],
 ];
@@ -97,6 +97,24 @@ export default function Profile() {
                                 ))}
                             </div>
                         </div>
+
+                        {user?.role === "superadmin" && (
+                            <button
+                                onClick={() => navigate("/superadmin")}
+                                className="glass-shell focus-ring rounded-[22px] text-left"
+                            >
+                                <div className="inner-card flex items-center gap-3 rounded-[18px] p-3.5">
+                                    <span className="grid h-11 w-11 shrink-0 place-items-center rounded-[14px] bg-gradient-to-br from-[hsl(48_60%_92%)] to-[hsl(110_36%_86%)]">
+                                        <LayoutDashboard className="h-[22px] w-[22px] text-[hsl(150_35%_30%)]" strokeWidth={1.8} />
+                                    </span>
+                                    <div className="min-w-0 flex-1">
+                                        <p className="text-[13.5px] font-semibold text-foreground">Admin console</p>
+                                        <p className="text-[11.5px] text-muted-foreground">Manage products, orders, users & impact</p>
+                                    </div>
+                                    <ChevronRight className="h-4 w-4 text-muted-foreground" strokeWidth={2} />
+                                </div>
+                            </button>
+                        )}
 
                         <button onClick={logout} className="glass-control focus-ring inline-flex items-center justify-center gap-2 rounded-[15px] py-3.5 text-[13.5px] font-medium text-secondary">
                             <LogOut className="h-4 w-4" strokeWidth={2} /> Sign out

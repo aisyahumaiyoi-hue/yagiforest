@@ -11,10 +11,11 @@ import { formatIDR } from "@/lib/format";
 import { toast } from "sonner";
 
 const STEPS = ["Contact", "Delivery", "Payment", "Review"];
-const SHIPPING = [
-    { id: "regular", Icon: Truck, name: "Regular delivery", eta: "Arrives 24-26 Aug", price: 18000 },
-    { id: "express", Icon: Zap, name: "Express delivery", eta: "Arrives 23 Aug", price: 31000 },
+const SHIPPING_FALLBACK = [
+    { id: "regular", name: "Regular delivery", eta: "Arrives in 2–4 days", price: 18000 },
+    { id: "express", name: "Express delivery", eta: "Arrives in 1 day", price: 31000 },
 ];
+const SHIPPING_ICONS = { regular: Truck, express: Zap };
 
 const Field = ({ label, helper, value, onChange, ...props }) => (
     <label className="block">
@@ -33,19 +34,22 @@ const Field = ({ label, helper, value, onChange, ...props }) => (
 
 export default function Checkout() {
     const navigate = useNavigate();
-    const { cartDetailed, cartSubtotal, isCustomer, placeOrder } = useYagi();
+    const { cartDetailed, cartSubtotal, isCustomer, placeOrder, shipping: shippingOptions } = useYagi();
 
     const [step, setStep] = useState(0);
     const [shipping, setShipping] = useState("regular");
     const [showApt, setShowApt] = useState(false);
     const [authOpen, setAuthOpen] = useState(false);
     const [placing, setPlacing] = useState(false);
+
+    const shippingList = (shippingOptions && shippingOptions.length ? shippingOptions : SHIPPING_FALLBACK)
+        .map((s) => ({ ...s, Icon: SHIPPING_ICONS[s.id] || Truck }));
     const [form, setForm] = useState({
         email: "", phone: "", full_name: "", address: "", city: "", province: "", postal_code: "",
     });
     const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
 
-    const shipCost = SHIPPING.find((s) => s.id === shipping)?.price || 0;
+    const shipCost = shippingList.find((s) => s.id === shipping)?.price || 0;
     const total = cartSubtotal + shipCost;
 
     const goPayment = () => {
@@ -184,7 +188,7 @@ export default function Checkout() {
                                     </div>
 
                                     <p className="mt-1 text-[13.5px] font-semibold text-foreground">Delivery method</p>
-                                    {SHIPPING.map(({ id, Icon, name, eta, price }) => {
+                                    {shippingList.map(({ id, Icon, name, eta, price }) => {
                                         const active = shipping === id;
                                         return (
                                             <button key={id} onClick={() => setShipping(id)} className="glass-shell focus-ring rounded-[18px] text-left">
@@ -229,7 +233,7 @@ export default function Checkout() {
                                 <>
                                     {[
                                         { title: "Delivery address", value: `${form.full_name || "—"} · ${form.address || "—"}, ${form.city || "—"}` },
-                                        { title: "Delivery method", value: SHIPPING.find((s) => s.id === shipping)?.name },
+                                        { title: "Delivery method", value: shippingList.find((s) => s.id === shipping)?.name },
                                         { title: "Payment method", value: "Bank transfer" },
                                     ].map((row, idx) => (
                                         <div key={row.title} className="glass-shell rounded-[18px]">

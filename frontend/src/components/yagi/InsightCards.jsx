@@ -1,33 +1,39 @@
 import { Sun, Sparkles, MessageCircle } from "lucide-react";
-import { PRODUCTS } from "./data";
-
-const INSIGHTS = [
-    {
-        key: "routine",
-        title: "Today\u2019s routine",
-        meta: "3 steps",
-        desc: "Keep your barrier strong & calm",
-        Icon: Sun,
-    },
-    {
-        key: "recommended",
-        title: "Recommended",
-        meta: "For you",
-        desc: "Curated picks for your skin",
-        thumb: PRODUCTS[0].image,
-        Icon: Sparkles,
-    },
-    {
-        key: "consult",
-        title: "Consult expert",
-        meta: "Online",
-        online: true,
-        desc: "Get personalized advice",
-        Icon: MessageCircle,
-    },
-];
+import { useYagi } from "@/store/YagiContext";
 
 export const InsightCards = ({ onConsult }) => {
+    const { wellness, products } = useYagi();
+    const completed = wellness?.routine_completed_today ?? 0;
+    const total = wellness?.routine_total_today ?? 0;
+    const routineMeta = total ? `${completed} of ${total} steps` : "No steps yet";
+    const recommendedThumb = products[0]?.images?.[0];
+
+    const INSIGHTS = [
+        {
+            key: "routine",
+            title: "Today\u2019s routine",
+            meta: routineMeta,
+            desc: "Keep your barrier strong & calm",
+            Icon: Sun,
+        },
+        {
+            key: "recommended",
+            title: "Recommended",
+            meta: "For you",
+            desc: "Curated picks for your skin",
+            thumb: recommendedThumb,
+            Icon: Sparkles,
+        },
+        {
+            key: "consult",
+            title: "Consult expert",
+            meta: "Online",
+            online: true,
+            desc: "Get personalized advice",
+            Icon: MessageCircle,
+        },
+    ];
+
     return (
         <div className="grid grid-cols-3 gap-2.5">
             {INSIGHTS.map(({ key, title, meta, desc, Icon, thumb, online }) => (

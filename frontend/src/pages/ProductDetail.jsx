@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
     Heart,
@@ -15,7 +15,6 @@ import {
     ShieldCheck,
     Leaf,
     X,
-    ThumbsUp,
     BadgeCheck,
 } from "lucide-react";
 import { MobileShell } from "@/components/yagi/MobileShell";
@@ -25,7 +24,7 @@ import { ImpactCard, AwardProof } from "@/components/yagi/Impact";
 import { BottomSheet } from "@/components/yagi/BottomSheet";
 import { ShopProductCard } from "@/components/yagi/ShopProductCard";
 import { useYagi } from "@/store/YagiContext";
-import { getProductBySlug, PRODUCTS } from "@/data/products";
+import { api } from "@/lib/api";
 import { formatIDR } from "@/lib/format";
 import { toast } from "sonner";
 import { AnimatePresence, motion } from "framer-motion";
@@ -38,11 +37,6 @@ const HELPS = [
     { Icon: Heart, text: "Designed for sensitive routines" },
 ];
 const REVIEW_FILTERS = ["All", "Eczema-prone", "Dry skin", "Sensitive", "Texture", "Repurchase"];
-const REVIEWS = [
-    { name: "Sari W.", initial: "S", rating: 5, tag: "Dry skin", verified: true, text: "Finally something that calms my dry patches without stinging. Skin feels comfortable all day." },
-    { name: "Dimas R.", initial: "D", rating: 5, tag: "Eczema-prone", verified: true, text: "Gentle enough for my flare-prone areas. I repurchase the refill every month." },
-    { name: "Aya P.", initial: "A", rating: 4, tag: "Sensitive", verified: true, text: "Light texture, sinks in fast. Fragrance-free which my sensitive skin appreciates." },
-];
 
 const Accordion = ({ title, children, defaultOpen = false }) => {
     const [open, setOpen] = useState(defaultOpen);
@@ -82,8 +76,8 @@ const Accordion = ({ title, children, defaultOpen = false }) => {
 export default function ProductDetail() {
     const { slug } = useParams();
     const navigate = useNavigate();
-    const { addToCart, toggleSaved, isSaved, addToRoutine, cartCount } = useYagi();
-    const product = useMemo(() => getProductBySlug(slug), [slug]);
+    const { addToCart, toggleSaved, isSaved, addToRoutine, cartCount, getProductBySlug, products, shipping } = useYagi();
+    const product = useMemo(() => getProductBySlug(slug) || products[0], [slug, getProductBySlug, products]);
 
     const [activeImg, setActiveImg] = useState(0);
     const [variant, setVariant] = useState(product.variants?.[product.variants.length > 1 ? 1 : 0]?.id);
@@ -92,12 +86,24 @@ export default function ProductDetail() {
     const [viewer, setViewer] = useState(false);
     const [matchOpen, setMatchOpen] = useState(false);
     const [reviewFilter, setReviewFilter] = useState("All");
+    const [reviews, setReviews] = useState([]);
+
+    useEffect(() => {
+        if (product?.id) {
+            api.productReviews(product.id).then((r) => setReviews(r.items || [])).catch(() => setReviews([]));
+        }
+    }, [product?.id]);
 
     const saved = isSaved(product.id);
     const activeVariant = product.variants?.find((v) => v.id === variant) || product.variants?.[0];
     const price = activeVariant?.price || product.price;
 
-    const shownReviews = REVIEWS.filter((r) => reviewFilter === "All" || r.tag === reviewFilter);
+    const shippingEta = useMemo(() => {
+        const eta = (shipping || []).find((s) => s.id === "regular")?.eta;
+        return eta ? `arrives ${eta.replace(/^Arrives\s+/i, "")}` : "arrives in 2–4 days";
+    }, [shipping]);
+
+    const shownReviews = reviews.filter((r) => reviewFilter === "All" || r.tag === reviewFilter);
 
     const handleAdd = () => {
         addToCart(product.id, variant, qty);
@@ -228,7 +234,7 @@ export default function ProductDetail() {
 
                 {/* Hierarchy */}
                 <div>
-                    <p className="text-[11.5px] font-medium tracking-wide text-secondary">Barrier care</p>
+                    <p className="text-[11.5px] font-medium tracking-wide text-secondary">{product.category || "Barrier care"}</p>
                     <h1 className="font-serif-display mt-0.5 text-[24px] leading-tight text-foreground">{product.name}</h1>
                     <p className="mt-1 text-[13px] text-muted-foreground">{product.purpose}</p>
                     <div className="mt-2 flex items-center gap-3">
@@ -277,7 +283,7 @@ export default function ProductDetail() {
                         <span className="mx-1 h-4 w-px bg-border" />
                         <Truck className="h-[17px] w-[17px] shrink-0 text-secondary" strokeWidth={1.9} />
                         <p className="text-[12px] text-muted-foreground">
-                            Order today · <span className="font-medium text-foreground">arrives 24–26 Aug</span>
+                            Order today · <span className="font-medium text-foreground">{shippingEta}</span>
                         </p>
                     </div>
                 </div>
@@ -418,7 +424,7 @@ export default function ProductDetail() {
                     product={product}
                     onMethodology={() =>
                         toast("How we calculate this", {
-                            description: "Metric · data source · frequency · last updated (sample data).",
+                            description: product.impact?.methodology || "Estimated from refill vs. single-use packaging.",
                         })
                     }
                 />
@@ -434,7 +440,7 @@ export default function ProductDetail() {
                                 </div>
                             ))}
                         </div>
-                        <p className="mt-2 text-[10px] text-muted-foreground">Projected contribution · sample data</p>
+                        <p className="mt-2 text-[10px] text-muted-foreground">Contribution applied to your impact ledger on purchase</p>
                     </div>
                 </div>
 
@@ -467,34 +473,37 @@ export default function ProductDetail() {
                     </div>
 
                     <div className="mt-3 flex flex-col gap-2.5">
-                        {shownReviews.slice(0, 3).map((r) => (
-                            <div key={r.name} className="glass-shell rounded-[20px]">
-                                <div className="inner-card rounded-[16px] p-3.5">
-                                    <div className="flex items-center gap-2.5">
-                                        <span className="grid h-8 w-8 place-items-center rounded-full bg-pale text-[13px] font-semibold text-secondary">
-                                            {r.initial}
-                                        </span>
-                                        <div className="flex-1">
-                                            <div className="flex items-center gap-1.5">
-                                                <p className="text-[12.5px] font-semibold text-foreground">{r.name}</p>
-                                                {r.verified && <BadgeCheck className="h-3.5 w-3.5 text-secondary" strokeWidth={2} />}
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <Stars rating={r.rating} size={11} />
-                                                <span className="rounded-full bg-pale px-2 py-[1px] text-[9.5px] font-medium text-secondary">
-                                                    {r.tag}
-                                                </span>
+                        {shownReviews.slice(0, 3).map((r) => {
+                            const initial = (r.title?.[0] || "Y").toUpperCase();
+                            const tag = r.tag || "Verified";
+                            return (
+                                <div key={r.id || r.created_at} className="glass-shell rounded-[20px]">
+                                    <div className="inner-card rounded-[16px] p-3.5">
+                                        <div className="flex items-center gap-2.5">
+                                            <span className="grid h-8 w-8 place-items-center rounded-full bg-pale text-[13px] font-semibold text-secondary">
+                                                {initial}
+                                            </span>
+                                            <div className="flex-1">
+                                                <div className="flex items-center gap-1.5">
+                                                    <p className="text-[12.5px] font-semibold text-foreground">{r.title || "YAGI customer"}</p>
+                                                    <BadgeCheck className="h-3.5 w-3.5 text-secondary" strokeWidth={2} />
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <Stars rating={r.rating} size={11} />
+                                                    <span className="rounded-full bg-pale px-2 py-[1px] text-[9.5px] font-medium text-secondary">
+                                                        {tag}
+                                                    </span>
+                                                </div>
                                             </div>
                                         </div>
+                                        <p className="mt-2 text-[12.5px] leading-relaxed text-muted-foreground">{r.body}</p>
                                     </div>
-                                    <p className="mt-2 text-[12.5px] leading-relaxed text-muted-foreground">{r.text}</p>
-                                    <button className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-secondary">
-                                        <ThumbsUp className="h-3.5 w-3.5" strokeWidth={2} />
-                                        Helpful
-                                    </button>
                                 </div>
-                            </div>
-                        ))}
+                            );
+                        })}
+                        {shownReviews.length === 0 && (
+                            <p className="py-4 text-center text-[12px] text-muted-foreground">No reviews yet.</p>
+                        )}
                     </div>
                     <button
                         onClick={() => toast("All reviews")}
@@ -508,7 +517,7 @@ export default function ProductDetail() {
                 <div>
                     <h3 className="font-serif-display mb-2 text-[18px] text-foreground">Pairs well with</h3>
                     <div className="no-scrollbar -mx-4 flex gap-2.5 overflow-x-auto px-4">
-                        {PRODUCTS.filter((p) => p.id !== product.id)
+                        {products.filter((p) => p.id !== product.id)
                             .slice(0, 3)
                             .map((p) => (
                                 <div key={p.id} className="w-[150px] shrink-0">

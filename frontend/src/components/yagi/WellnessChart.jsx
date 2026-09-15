@@ -1,12 +1,13 @@
 import { WELLNESS_SERIES } from "./data";
 
-// Editorial 7-day line chart in desaturated botanical green (inline SVG)
-export const WellnessChart = () => {
+// Editorial 7-day line chart in desaturated botanical green (inline SVG).
+// `series` is an array of numbers (routine completion %) derived from real activity.
+export const WellnessChart = ({ series }) => {
     const W = 158;
     const H = 74;
     const padX = 8;
     const padY = 12;
-    const data = WELLNESS_SERIES;
+    const data = series && series.length ? series : WELLNESS_SERIES;
     const min = Math.min(...data) - 4;
     const max = Math.max(...data) + 2;
 

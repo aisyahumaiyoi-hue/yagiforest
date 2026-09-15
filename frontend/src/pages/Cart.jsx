@@ -7,14 +7,13 @@ import { ShopProductCard } from "@/components/yagi/ShopProductCard";
 import { useYagi } from "@/store/YagiContext";
 import { formatIDR } from "@/lib/format";
 
-const DELIVERY = 18000;
-
 export default function Cart() {
     const navigate = useNavigate();
-    const { cartDetailed, cartSubtotal, updateQty, removeFromCart, toggleSaved, products } = useYagi();
+    const { cartDetailed, cartSubtotal, updateQty, removeFromCart, toggleSaved, products, shipping } = useYagi();
     const [promoOpen, setPromoOpen] = useState(false);
 
-    const total = cartSubtotal ? cartSubtotal + DELIVERY : 0;
+    const delivery = (shipping || []).find((s) => s.id === "regular")?.price ?? 18000;
+    const total = cartSubtotal ? cartSubtotal + delivery : 0;
     const recs = products.filter((p) => !cartDetailed.some((c) => c.productId === p.id)).slice(0, 2);
 
     if (cartDetailed.length === 0) {
@@ -147,7 +146,7 @@ export default function Cart() {
                                 </div>
                             ))}
                         </div>
-                        <p className="mt-2 text-[10px] text-muted-foreground">Sample impact data · How this is calculated</p>
+                        <p className="mt-2 text-[10px] text-muted-foreground">Impact is calculated from your lower-waste items at checkout</p>
                     </div>
                 </div>
 
@@ -174,7 +173,7 @@ export default function Cart() {
                     <div className="inner-card rounded-[18px] p-4">
                         {[
                             ["Subtotal", formatIDR(cartSubtotal)],
-                            ["Delivery", formatIDR(DELIVERY)],
+                            ["Delivery", formatIDR(delivery)],
                             ["Discount", "—"],
                         ].map(([k, v]) => (
                             <div key={k} className="flex justify-between py-1 text-[13px]">
